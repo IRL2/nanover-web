@@ -61,40 +61,57 @@ export default async function start() {
     objects.add(atoms);
 
     const bonds = new THREE.InstancedMesh(
-        new THREE.CylinderGeometry(),
+        new THREE.CylinderGeometry().rotateX(Math.PI * .5),
         new THREE.MeshStandardMaterial(),
         count,
     );
     objects.add(bonds);
 
     const matrix = new THREE.Matrix4();
-    const scale = new THREE.Vector3(1, 1, 1).multiplyScalar(.025);
+    const scaleA = new THREE.Vector3(1, 1, 1).multiplyScalar(.01);
+    const scaleB = scaleA.clone().multiply(new THREE.Vector3(.5, .5, 3));
     const color = new THREE.Color();
 
-    const axis = new THREE.Vector3();
     const rot = new THREE.Matrix4();
+    const up = new THREE.Vector3();
+
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    const t = new THREE.Vector3();
+
+    const r = new THREE.Quaternion().identity();
+    const ri = new THREE.Quaternion().identity();
+
+    const bondRadius = .5;
 
     for (let i = 0; i < count; ++i) {
-        matrix.identity();
-        
-        axis.randomDirection();
-        rot.makeRotationAxis(axis, Math.random());
-        matrix.premultiply(rot);
+        const d = .05;
 
-        matrix.scale(scale);
-        matrix.setPosition(
-            THREE.MathUtils.randFloatSpread(2), 
-            THREE.MathUtils.randFloatSpread(2),
-            THREE.MathUtils.randFloatSpread(2),
-        );
+        t.randomDirection();
+        a.copy(t).multiplyScalar(2 * (1 - Math.pow(Math.random(), 4)));
+        t.randomDirection();
+        b.copy(a).addScaledVector(t, d);
 
         color.setHSL(Math.random(), .75, .5);
+        
+        // atom
+        matrix.compose(a, ri, scaleA);
 
         atoms.setMatrixAt(i, matrix);
         atoms.setColorAt(i, color);
 
-        matrix.scale(new THREE.Vector3(.5, 3, .5));
-        
+        // bond
+        rot.identity();
+        rot.lookAt(a, b, up);
+        r.setFromRotationMatrix(rot);
+        r.normalize();
+
+        t.addVectors(a, b).multiplyScalar(.5);
+        scaleB.copy(scaleA).multiplyScalar(bondRadius);
+        scaleB.z = d;
+
+        matrix.compose(t, r, scaleB);
+
         bonds.setMatrixAt(i, matrix);
         bonds.setColorAt(i, color);
     }
