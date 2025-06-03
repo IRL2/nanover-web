@@ -2,7 +2,7 @@
 
 import * as THREE from "three";
 import Stats from "stats";
-import { VRButton } from './VRButton.js';
+import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
@@ -24,7 +24,7 @@ export default async function start() {
     const container = document.querySelector("body");
     container.appendChild(renderer.domElement);
     container.appendChild(stats.domElement);
-    container.appendChild(VRButton.createButton(renderer));
+    container.appendChild(XRButton.createButton(renderer));
 
     //
 
@@ -36,18 +36,21 @@ export default async function start() {
     const objects = new THREE.Object3D();
     scene.add(objects);
 
+    objects.position.set(0, 1, 0);
+
     const light = new THREE.DirectionalLight();
-    light.position.set(2, 2, 1);
-    scene.add(light);
 
     const light2 = new THREE.AmbientLight(new THREE.Color(), .25);
     scene.add(light2);
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 50);
     camera.position.set(1, 0, 3);
+    scene.add(camera);
+    camera.add(light);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.maxDistance = 10;
+    controls.target.set(0, 1, 0);
     controls.update();
 
     const count = Math.pow(2, 12);
@@ -80,68 +83,100 @@ export default async function start() {
     const t = new THREE.Vector3();
 
     const r = new THREE.Quaternion().identity();
-    const ri = new THREE.Quaternion().identity();
-    const rt = new THREE.Quaternion().identity();
 
     const bondRadius = .5;
-    const d = .05;
 
+    const positions = new Array(count * 3).fill(0);
+    for (let i = 1; i < count; ++i) {
+        t.randomDirection().multiplyScalar(10);
+        a.fromArray(positions, (i - 1) * 3);
+        t.sub(a).normalize();
+
+        a.addScaledVector(t, THREE.MathUtils.randFloat(0.01, 0.05) * 2);
+        a.toArray(positions, i * 3);
+    }
+
+    // colors
     for (let i = 0; i < count; ++i) {
-        t.randomDirection();
-        a.copy(t).multiplyScalar(2 * (1 - Math.pow(Math.random(), 4)));
-        t.randomDirection();
-        b.copy(a).addScaledVector(t, d);
-
-        color.setHSL(Math.random(), .75, .5);
-        
-        // atom
-        matrix.compose(a, ri, scaleA);
-
-        atoms.setMatrixAt(i, matrix);
+        color.setHSL((i / count) + Math.random() * .2, .75, .5);
         atoms.setColorAt(i, color);
+    }
 
-        // bond
-        rot.identity();
-        rot.lookAt(a, b, up);
-        r.setFromRotationMatrix(rot);
-        r.normalize();
+    const c = new THREE.Color();
 
-        t.addVectors(a, b).multiplyScalar(.5);
-        scaleB.copy(scaleA).multiplyScalar(bondRadius);
-        scaleB.z = d;
+    for (let i = 0; i < count-1; ++i) {
+        atoms.getColorAt((i+0), color);
+        atoms.getColorAt((i+1), c);
 
-        matrix.compose(t, r, scaleB);
-
-        bonds.setMatrixAt(i, matrix);
+        color.lerpColors(color, c, .5);
         bonds.setColorAt(i, color);
     }
+
+    bonds.count = count - 1;
+
+    function update_atoms() {
+        for (let i = 0; i < count; ++i) {
+            a.fromArray(positions, i * 3);
+
+            matrix.identity();
+            matrix.setPosition(a);
+            matrix.scale(scaleA);
+
+            atoms.setMatrixAt(i, matrix);
+        }
+
+        atoms.instanceMatrix.needsUpdate = true;
+    }
+
+    function update_bonds() {
+        for (let i = 0; i < count-1; ++i) {
+            a.fromArray(positions, (i+0) * 3);
+            b.fromArray(positions, (i+1) * 3);
+            const d = t.copy(a).sub(b).length();
+
+            rot.identity();
+            rot.lookAt(a, b, up);
+            r.setFromRotationMatrix(rot);
+            r.normalize();
+
+            t.addVectors(a, b).multiplyScalar(.5);
+            scaleB.copy(scaleA).multiplyScalar(bondRadius);
+            scaleB.z = d;
+
+            matrix.compose(t, r, scaleB);
+
+            bonds.setMatrixAt(i, matrix);
+        }
+
+        bonds.instanceMatrix.needsUpdate = true;
+    }
+
+    update_atoms();
+    update_bonds();
 
     function shift(dt) {
         for (let i = 0; i < count; ++i) {
             t.randomDirection();
-            r.random();
-            rt.slerpQuaternions(ri, r, dt);
-            rt.normalize();
-            
-            // atom
-            atoms.getMatrixAt(i, matrix);
-            matrix.decompose(a, r, scaleB);
-            a.addScaledVector(t, dt * .1);
-            matrix.compose(a, r, scaleB);
-            atoms.setMatrixAt(i, matrix);
-
-            // bond
-            bonds.getMatrixAt(i, matrix);
-            matrix.decompose(b, r, scaleB);
-            t.set(0, 0, 1).applyQuaternion(r);
-            b.copy(a).addScaledVector(t, d * .5);
-            r.multiply(rt);
-            matrix.compose(b, r, scaleB);
-            bonds.setMatrixAt(i, matrix);
+            a.fromArray(positions, i * 3);
+            a.addScaledVector(t, dt * .05);
+            a.toArray(positions, i * 3);
         }
 
-        atoms.instanceMatrix.needsUpdate = true;
-        bonds.instanceMatrix.needsUpdate = true;
+        for (let i = 0; i < count-1; ++i) {
+            a.fromArray(positions, (i+0) * 3);
+            b.fromArray(positions, (i+1) * 3);
+
+            t.copy(b).sub(a);
+
+            if (t.lengthSq() > 0.001) {
+                t.multiplyScalar(dt);
+                a.add(t);
+                a.toArray(positions, (i+0) * 3);
+            }
+        }
+
+        update_atoms();
+        update_bonds();
     }
 
     // control loop
