@@ -69,7 +69,7 @@ export default async function start() {
 
     const matrix = new THREE.Matrix4();
     const scaleA = new THREE.Vector3(1, 1, 1).multiplyScalar(.01);
-    const scaleB = scaleA.clone().multiply(new THREE.Vector3(.5, .5, 3));
+    const scaleB = new THREE.Vector3(1, 1, 1);
     const color = new THREE.Color();
 
     const rot = new THREE.Matrix4();
@@ -81,12 +81,12 @@ export default async function start() {
 
     const r = new THREE.Quaternion().identity();
     const ri = new THREE.Quaternion().identity();
+    const rt = new THREE.Quaternion().identity();
 
     const bondRadius = .5;
+    const d = .05;
 
     for (let i = 0; i < count; ++i) {
-        const d = .05;
-
         t.randomDirection();
         a.copy(t).multiplyScalar(2 * (1 - Math.pow(Math.random(), 4)));
         t.randomDirection();
@@ -116,11 +116,41 @@ export default async function start() {
         bonds.setColorAt(i, color);
     }
 
+    function shift(dt) {
+        for (let i = 0; i < count; ++i) {
+            t.randomDirection();
+            r.random();
+            rt.slerpQuaternions(ri, r, dt);
+            rt.normalize();
+            
+            // atom
+            atoms.getMatrixAt(i, matrix);
+            matrix.decompose(a, r, scaleB);
+            a.addScaledVector(t, dt * .1);
+            matrix.compose(a, r, scaleB);
+            atoms.setMatrixAt(i, matrix);
+
+            // bond
+            bonds.getMatrixAt(i, matrix);
+            matrix.decompose(b, r, scaleB);
+            t.set(0, 0, 1).applyQuaternion(r);
+            b.copy(a).addScaledVector(t, d * .5);
+            r.multiply(rt);
+            matrix.compose(b, r, scaleB);
+            bonds.setMatrixAt(i, matrix);
+        }
+
+        atoms.instanceMatrix.needsUpdate = true;
+        bonds.instanceMatrix.needsUpdate = true;
+    }
+
     // control loop
     function animate() {
         UPDATE_VIEWPORT();
 
         const dt = Math.min(1/15, clock.getDelta());
+
+        shift(dt);
 
         if (renderer.xr.isPresenting) {
             update_xr(dt);
