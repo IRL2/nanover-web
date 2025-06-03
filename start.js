@@ -33,6 +33,9 @@ export default async function start() {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x505050);
 
+    const fog = new THREE.Fog("#070707", 2, 3);
+    scene.fog = fog;
+
     const objects = new THREE.Object3D();
     scene.add(objects);
 
@@ -79,12 +82,9 @@ export default async function start() {
     const b = new THREE.Vector3();
     const t = new THREE.Vector3();
 
-    const r = new THREE.Quaternion().identity();
-    const ri = new THREE.Quaternion().identity();
-    const rt = new THREE.Quaternion().identity();
+    const r = new THREE.Quaternion();
 
     const bondRadius = .5;
-    const d = .05;
 
     const positions = new Array(count * 3).fill(0);
     for (let i = 1; i < count; ++i) {
@@ -151,9 +151,6 @@ export default async function start() {
         bonds.instanceMatrix.needsUpdate = true;
     }
 
-    update_atoms();
-    update_bonds();
-
     function shift(dt) {
         for (let i = 0; i < count; ++i) {
             t.randomDirection();
@@ -186,6 +183,15 @@ export default async function start() {
         const dt = Math.min(1/15, clock.getDelta());
 
         shift(dt);
+
+        atoms.computeBoundingSphere();
+        const r1 = atoms.boundingSphere.radius;
+        const r2 = camera.getWorldPosition(t).length();
+        const d1 = Math.max(0, r2 - r1);
+        // console.log(r);
+
+        fog.near = d1;
+        fog.far = d1 + r1 * 2;
 
         if (renderer.xr.isPresenting) {
             update_xr(dt);
