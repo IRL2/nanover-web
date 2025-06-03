@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <title>NanoVer Web</title>
+
+  <style>
+    :root {
+      font-family: sans-serif;
+      line-height: 1.5;
+      user-select: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      position: absolute;
+      inset: 0;
+
+      margin: 0;
+      padding: 0;
+
+      overflow: hidden;
+
+      background-color: black;
+      color: white;
+    }
+  </style>
+</head>
+
+<body>
+  <script type="importmap">
+    {
+      "imports": {
+        "start": "./start.js",
+        "three": "./three.module.min.js",
+        "stats": "./stats.module.js"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import start from "start";
+    document.addEventListener("DOMContentLoaded", start);
+  </script>
+</body>
+
+</html>

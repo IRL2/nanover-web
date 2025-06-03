@@ -1,0 +1,17 @@
+{
+    "typeAcquisition": {
+      "enable": true,
+      "include": ["three.module", "stats.js"]
+    },
+    "compilerOptions": {
+      "module": "commonjs",
+      "target": "esnext",
+      "checkJs": true,
+      "baseUrl": ".",
+      "paths": {
+        "three": ["three.module.min.js"],
+        "stats": ["stats.module.js"]
+      }
+    },
+    "include": ["**/*.js", "*.d.ts"],
+}
