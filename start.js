@@ -100,10 +100,15 @@ export default async function start() {
         let count = 0;
 
         for (const { traj, renderer} of pairs) {
-            renderer.setPositionTuples(traj.positions[index]);
+            if (index >= traj.positions.length)
+                continue;
+            
+            const positions = traj.positions[index];
 
-            for (let i = 0; i < traj.positions[0].length; ++i) {
-                pos.fromArray(traj.positions[index][i]);
+            renderer.setPositionTuples(positions);
+
+            for (let i = 0; i < positions.length; ++i) {
+                pos.fromArray(positions[i]);
                 sum.add(pos);
             }
 
@@ -125,8 +130,10 @@ export default async function start() {
 
         const dt = Math.min(1/15, clock.getDelta());
 
+        const max = Math.max(0, ...pairs.map(({ traj }) => traj.positions.length));
+        const frame = Math.floor((performance.now() / 1000 * 30 * 3) % max);
+
         if (pairs.length > 0) {
-            const frame = Math.floor((performance.now() / 1000 * 30 * 3) % pairs[0].traj.positions.length);
             frame_positions_index(frame);
         }
 
