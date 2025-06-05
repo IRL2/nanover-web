@@ -6,12 +6,27 @@ import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
+import NaiveRenderer from "./NaiveRenderer.js";
 
 // TODO: look into HTMLMesh (https://threejs.org/examples/?q=xr#webgpu_xr_native_layers)
 
+const elementColors = new Map([
+    [1, new THREE.Color("white")],
+    [6, new THREE.Color("black")],
+    [7, new THREE.Color("blue")],
+    [8, new THREE.Color("red")],
+]);
+
+/**
+ * @typedef {Object} TestTrajectoryData
+ * @property {object} topology
+ * @property {number[]} topology.elements
+ * @property {number[][]} topology.bonds
+ * @property {number[][][]} positions 
+ */
+
 export default async function start() {
-    const data = await fetch("./traj.json").then((r) => r.json());
-    console.log(data);
+    const pairs = [];
 
     // threejs + xr setup
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -53,133 +68,56 @@ export default async function start() {
     controls.target.set(0, 1, 0);
     controls.update();
 
-    const atomCount = data.positions[0].length;
-    const bondCount = data.topology.bonds.length;
-    console.log(atomCount, bondCount);
-
-    const atoms = new THREE.InstancedMesh(
-        new THREE.IcosahedronGeometry(1, 2),
-        new THREE.MeshStandardMaterial(),
-        atomCount,
-    );
-    objects.add(atoms);
-
-    const bonds = new THREE.InstancedMesh(
-        new THREE.CylinderGeometry().rotateX(Math.PI * .5),
-        new THREE.MeshStandardMaterial(),
-        bondCount,
-    );
-    objects.add(bonds);
-
     objects.scale.multiplyScalar(.1);
 
-    const matrix = new THREE.Matrix4();
-    const scaleA = new THREE.Vector3(1, 1, 1).multiplyScalar(.035);
-    const scaleB = new THREE.Vector3(1, 1, 1);
-    const colorA = new THREE.Color();
-    const colorB = new THREE.Color();
+    const c = new THREE.Color();
+    function make_color(traj, i) {
+        c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
+        c.lerp(elementColors.get(traj.topology.elements[i]), .65);
+        return c
+    }
 
-    const rot = new THREE.Matrix4();
-    const up = new THREE.Vector3();
+    for (let i = 0; i < 7; ++i) {
+        const path = `./traj-${i}.json`;
+        fetch(path).then((r) => r.json()).then((traj) => {
+            const renderer = new NaiveRenderer();
+            objects.add(renderer);
 
-    const a = new THREE.Vector3();
-    const b = new THREE.Vector3();
-    const t = new THREE.Vector3();
+            pairs.push({ traj, renderer });
 
-    const r = new THREE.Quaternion().identity();
-
-    const bondRadius = .5;
-
-    const positions = new Array(atomCount * 3).fill(0);
+            const colors = traj.positions[0].map((_, i) => make_color(traj, i).toArray());
+            renderer.setDataTuples(
+                traj.positions[0],
+                colors,
+                traj.topology.bonds,
+            );
+        });
+    }
 
     function frame_positions_index(index) {
         const sum = new THREE.Vector3();
+        const pos = new THREE.Vector3();
+        let count = 0;
 
-        for (let i = 0; i < atomCount; ++i) {
-            t.fromArray(data.positions[index][i]);
-            t.toArray(positions, i * 3);
+        for (const { traj, renderer} of pairs) {
+            renderer.setPositionTuples(traj.positions[index]);
 
-            sum.add(t);
+            for (let i = 0; i < traj.positions[0].length; ++i) {
+                pos.fromArray(traj.positions[index][i]);
+                sum.add(pos);
+            }
+
+            count += traj.positions[0].length;
         }
 
-        sum.divideScalar(atomCount);
+        // recente
+        sum.divideScalar(count);
         sum.multiply(objects.scale);
-        sum.add(objects.position);
 
-        controls.target.copy(sum);
+        objects.position.set(0, 1, 0).sub(sum);
         controls.update();
     }
     frame_positions_index(0);
-
-    const elementColors = new Map([
-        [1, new THREE.Color("white")],
-        [6, new THREE.Color("black")],
-        [7, new THREE.Color("blue")],
-        [8, new THREE.Color("red")],
-    ]);
-
-    // colors
-    for (let i = 0; i < atomCount; ++i) {
-        colorA.setHSL((i / atomCount) + Math.random() * .1, .25, .5);
-
-        const element = data.topology.elements[i];
-
-        if (elementColors.has(element)) {
-            colorA.lerp(elementColors.get(element), .65);
-        }
-
-        atoms.setColorAt(i, colorA);
-    }
-
-    for (let i = 0; i < bondCount; ++i) {
-        const [ia, ib] = data.topology.bonds[i];
-        atoms.getColorAt(ia, colorA);
-        atoms.getColorAt(ib, colorB);
-
-        colorA.lerp(colorB, .5);
-        bonds.setColorAt(i, colorA);
-    }
-
-    function update_atoms() {
-        for (let i = 0; i < atomCount; ++i) {
-            a.fromArray(positions, i * 3);
-
-            matrix.identity();
-            matrix.setPosition(a);
-            matrix.scale(scaleA);
-
-            atoms.setMatrixAt(i, matrix);
-        }
-
-        atoms.instanceMatrix.needsUpdate = true;
-    }
-
-    function update_bonds() {
-        for (let i = 0; i < bondCount; ++i) {
-            const [ia, ib] = data.topology.bonds[i];
-            a.fromArray(positions, ia * 3);
-            b.fromArray(positions, ib * 3);
-            const d = t.copy(a).sub(b).length();
-
-            rot.identity();
-            rot.lookAt(a, b, up);
-            r.setFromRotationMatrix(rot);
-            r.normalize();
-
-            t.lerpVectors(a, b, .5);
-            scaleB.copy(scaleA).multiplyScalar(bondRadius);
-            scaleB.z = d;
-
-            matrix.compose(t, r, scaleB);
-
-            bonds.setMatrixAt(i, matrix);
-        }
-
-        bonds.instanceMatrix.needsUpdate = true;
-    }
-
-    update_atoms();
-    update_bonds();
 
     // control loop
     function animate() {
@@ -187,10 +125,10 @@ export default async function start() {
 
         const dt = Math.min(1/15, clock.getDelta());
 
-        const frame = Math.floor((performance.now() / 1000 * 30 * 3) % data.positions.length);
-        frame_positions_index(frame);
-        update_atoms();
-        update_bonds();
+        if (pairs.length > 0) {
+            const frame = Math.floor((performance.now() / 1000 * 30 * 3) % pairs[0].traj.positions.length);
+            frame_positions_index(frame);
+        }
 
         if (renderer.xr.isPresenting) {
             update_xr(dt);
