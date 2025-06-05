@@ -4,6 +4,7 @@ import * as THREE from "three";
 import Stats from "stats";
 import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
+import { decode } from "./convert.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
 import NaiveRenderer from "./NaiveRenderer.js";
@@ -17,15 +18,8 @@ const elementColors = new Map([
     [8, new THREE.Color("red")],
 ]);
 
-/**
- * @typedef {Object} TestTrajectoryData
- * @property {object} topology
- * @property {number[]} topology.elements
- * @property {number[][]} topology.bonds
- * @property {number[][][]} positions 
- */
-
 export default async function start() {
+    /** @type {{ traj: any, renderer: NaiveRenderer }[]} */
     const pairs = [];
 
     // threejs + xr setup
@@ -77,16 +71,24 @@ export default async function start() {
         return c
     }
 
-    for (let i = 0; i < 7; ++i) {
-        const path = `./traj-${i}.json`;
-        fetch(path).then((r) => r.json()).then((traj) => {
+    const fileCount = 7;
+
+    for (let i = 0; i < fileCount; ++i) {
+        const path = `./traj-${i}-small.json`;
+        fetch(path).then((r) => r.json()).then(decode).then((traj) => {
             const renderer = new NaiveRenderer();
             objects.add(renderer);
 
             pairs.push({ traj, renderer });
 
-            const colors = traj.positions[0].map((_, i) => make_color(traj, i).toArray());
-            renderer.setDataTuples(
+            const atomCount = traj.positions[0].length / 3;
+
+            const colors = new Float16Array(traj.positions[0].length);
+            for (let j = 0; j < atomCount; ++j) {
+                make_color(traj, j).toArray(colors, j * 3);
+            }
+
+            renderer.setData(
                 traj.positions[0],
                 colors,
                 traj.topology.bonds,
@@ -104,18 +106,18 @@ export default async function start() {
                 continue;
             
             const positions = traj.positions[index];
+            renderer.setPositions(positions);
 
-            renderer.setPositionTuples(positions);
+            const atomCount = positions.length / 3;
+            count += atomCount;
 
-            for (let i = 0; i < positions.length; ++i) {
-                pos.fromArray(positions[i]);
+            for (let i = 0; i < atomCount; ++i) {
+                pos.fromArray(positions, i * 3);
                 sum.add(pos);
             }
-
-            count += traj.positions[0].length;
         }
 
-        // recente
+        // recenter
         sum.divideScalar(count);
         sum.multiply(objects.scale);
 

@@ -45,32 +45,33 @@ class NaiveRenderer extends THREE.Object3D {
         );
         this.add(this.bondsMesh);
 
+        /** @type {ReadonlyArray<number>} */
         this._bonds = []; 
     }
 
     /**
-     * @param {number[][]} positions
-     * @param {number[][]} colors
-     * @param {number[][]} bonds
+     * @param {NumberArray} positions
+     * @param {NumberArray} colors
+     * @param {NumberArray} bonds
      */
-    setDataTuples(positions, colors, bonds) {
-        const atomCount = positions.length;
+    setData(positions, colors, bonds) {
+        const atomCount = positions.length / 3;
         this.atomsMesh.count = atomCount;
 
         for (let i = 0; i < atomCount; ++i) {
-            colorA.fromArray(colors[i]);
+            colorA.fromArray(colors, i * 3);
             this.atomsMesh.setColorAt(i, colorA);
         }
 
-        const bondCount = bonds.length;
+        const bondCount = bonds.length / 2;
         this.bondsMesh.count = bondCount;
 
         this._bonds = bonds; 
 
         for (let i = 0; i < bondCount; ++i) {
-            const [ia, ib] = bonds[i];
-            colorA.fromArray(colors[ia]);
-            colorB.fromArray(colors[ib]);
+            const [ia, ib] = [bonds[i*2 + 0], bonds[i*2 + 1]];
+            colorA.fromArray(colors, ia * 3);
+            colorB.fromArray(colors, ib * 3);
             colorA.lerp(colorB, .5);
             this.bondsMesh.setColorAt(i, colorA);
         }
@@ -78,14 +79,14 @@ class NaiveRenderer extends THREE.Object3D {
         this.atomsMesh.instanceColor.needsUpdate = true;
         this.bondsMesh.instanceColor.needsUpdate = true;
         
-        this.setPositionTuples(positions);
+        this.setPositions(positions);
     }
 
     /**
-     * @param {number[][]} positions
+     * @param {NumberArray} positions
      */
-    setPositionTuples(positions) {
-        const atomCount = positions.length;
+    setPositions(positions) {
+        const atomCount = positions.length / 3;
         this.atomsMesh.count = atomCount;
 
         // TODO: independent scales
@@ -93,7 +94,7 @@ class NaiveRenderer extends THREE.Object3D {
         matrix.scale(hackScale);
 
         for (let i = 0; i < atomCount; ++i) {
-            t.fromArray(positions[i]);
+            t.fromArray(positions, i * 3);
             matrix.setPosition(t);
             this.atomsMesh.setMatrixAt(i, matrix);
         }
@@ -102,9 +103,9 @@ class NaiveRenderer extends THREE.Object3D {
         const bondCount = bonds.length;
 
         for (let i = 0; i < bondCount; ++i) {
-            const [ia, ib] = bonds[i];
-            posA.fromArray(positions[ia]);
-            posB.fromArray(positions[ib]);
+            const [ia, ib] = [bonds[i*2 + 0], bonds[i*2 + 1]];
+            posA.fromArray(positions, ia * 3);
+            posB.fromArray(positions, ib * 3);
 
             const d = posU.copy(posA).sub(posB).length();
             rot.lookAt(posA, posB, UP);
