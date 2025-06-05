@@ -45,14 +45,14 @@ class NaiveRenderer extends THREE.Object3D {
         );
         this.add(this.bondsMesh);
 
-        /** @type {ReadonlyArray<number>} */
+        /** @type {ArrayLike<number>} */
         this._bonds = []; 
     }
 
     /**
-     * @param {NumberArray} positions
-     * @param {NumberArray} colors
-     * @param {NumberArray} bonds
+     * @param {ArrayLike<number>} positions
+     * @param {ArrayLike<number>} colors
+     * @param {ArrayLike<number>} bonds
      */
     setData(positions, colors, bonds) {
         const atomCount = positions.length / 3;
@@ -83,7 +83,7 @@ class NaiveRenderer extends THREE.Object3D {
     }
 
     /**
-     * @param {NumberArray} positions
+     * @param {ArrayLike<number>} positions
      */
     setPositions(positions) {
         const atomCount = positions.length / 3;

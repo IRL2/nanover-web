@@ -74,7 +74,7 @@ export default async function start() {
     const fileCount = 7;
 
     for (let i = 0; i < fileCount; ++i) {
-        const path = `./traj-${i}-small.json`;
+        const path = `./data/ludo-gluhut-${i}.json`;
         fetch(path).then((r) => r.json()).then(decode).then((traj) => {
             const renderer = new NaiveRenderer();
             objects.add(renderer);
@@ -86,6 +86,8 @@ export default async function start() {
             const colors = new Float16Array(traj.positions[0].length);
             for (let j = 0; j < atomCount; ++j) {
                 make_color(traj, j).toArray(colors, j * 3);
+                // c.setHSL(i / fileCount, .75, .5);
+                // c.toArray(colors, j * 3);
             }
 
             renderer.setData(
@@ -101,11 +103,8 @@ export default async function start() {
         const pos = new THREE.Vector3();
         let count = 0;
 
-        for (const { traj, renderer} of pairs) {
-            if (index >= traj.positions.length)
-                continue;
-            
-            const positions = traj.positions[index];
+        for (const { traj, renderer} of pairs) {            
+            const positions = traj.positions[Math.min(index, traj.positions.length-1)];
             renderer.setPositions(positions);
 
             const atomCount = positions.length / 3;

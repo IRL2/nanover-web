@@ -1,8 +1,3 @@
-/** 
- * @typedef {Object.<number, number>|Object} NumberArray
- * @property {number} length
-*/
-
 /**
  * @typedef {Object} TestTrajectoryData
  * @property {object} topology
@@ -22,7 +17,7 @@
 /**
  * @typedef {Object} TestTrajectory
  * @property {object} topology
- * @property {NumberArray} topology.elements
- * @property {NumberArray} topology.bonds
- * @property {NumberArray[]} positions 
+ * @property {Uint8Array} topology.elements
+ * @property {Uint32Array} topology.bonds
+ * @property {Float32Array[]} positions 
  */

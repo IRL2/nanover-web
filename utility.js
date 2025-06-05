@@ -49,3 +49,17 @@ export async function textFromFile(file) {
         reader.readAsText(file); 
     });
 }
+
+/**
+ * Offer blob as a file download with given filename.
+ * @param {Blob} blob 
+ * @param {string} name 
+ */
+export async function saveBlobAs(blob, name) {
+    const element = document.createElement("a");
+    const url = window.URL.createObjectURL(blob);
+    element.href = url;
+    element.download = name;
+    element.click();
+    window.URL.revokeObjectURL(url);
+};

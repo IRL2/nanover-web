@@ -1,25 +1,15 @@
-export async function start() {
-    const i = 6;
-    const path = `./traj-${i}.json`;
+import { saveBlobAs } from "./utility.js";
+
+export default async function start() {
+    const i = 0;
+    const path = `./traj-${i}-small.json`;
     
-    /** @type {TestTrajectoryData} */
-    const traj = await fetch(path).then((r) => r.json());
+    /** @type {TestTrajectory} */
+    const traj = await fetch(path).then((r) => r.json()).then(decode);
+    console.log(traj);
 
-    const elements = new Uint8Array(traj.topology.elements);
-    const bonds = new Uint32Array(traj.topology.bonds.flat());
-    const positions = traj.positions.map((positions) => new Float32Array(positions.flat()));
-
-    console.log(elements, bonds, positions);
-
-    const better = {
-        topology: {
-            elements: bytesToBase64(elements), 
-            bonds: bytesToBase64(bonds),
-        },
-        positions: positions.map((positions) => bytesToBase64(positions)),
-    };
-
-    console.log(JSON.stringify(better));
+    // saveBlobAs(new Blob([JSON.stringify(better)]), "traj-small.json");
+    saveBlobAs(new Blob([traj.topology.elements, traj.topology.bonds, ...traj.positions], {type: "octet/stream"}), "test.traj");
 
     /** @type {TestTrajectoryDataSmall} */
     const data = await fetch(`./traj-${i}-small.json`).then((r) => r.json());
