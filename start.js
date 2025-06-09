@@ -83,7 +83,7 @@ export default async function start() {
 
             const atomCount = traj.positions[0].length / 3;
 
-            const colors = new Float16Array(traj.positions[0].length);
+            const colors = new Float32Array(traj.positions[0].length);
             for (let j = 0; j < atomCount; ++j) {
                 make_color(traj, j).toArray(colors, j * 3);
                 // c.setHSL(i / fileCount, .75, .5);
