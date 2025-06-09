@@ -1,6 +1,6 @@
 "use strict";
 
-import * as THREE from "three";
+import * as THREE from 'https://unpkg.com/three@0.177.0/build/three.module.js';
 
 const DEFAULT_OPTIONS = {
     atomLimit: 2048,

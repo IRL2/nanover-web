@@ -1,15 +1,17 @@
 "use strict";
 
-import * as THREE from "three";
+import * as THREE from 'https://unpkg.com/three@0.177.0/build/three.module.js';
 import Stats from "stats";
 import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
 import { decode } from "./convert.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
+import { XRControllerModelFactory } from 'https://unpkg.com/three@0.177.0/examples/jsm/webxr/XRControllerModelFactory.js';
 import NaiveRenderer from "./NaiveRenderer.js";
 
 // TODO: look into HTMLMesh (https://threejs.org/examples/?q=xr#webgpu_xr_native_layers)
+// TODO: hand tracking (https://github.com/vrmeup/threejs-webxr-hands-example/tree/main)
 
 const elementColors = new Map([
     [1, new THREE.Color("white")],
@@ -54,8 +56,26 @@ export default async function start() {
     camera.position.set(1, 0, 3);
     scene.add(camera);
 
-    camera.add(new THREE.DirectionalLight());
-    scene.add(new THREE.AmbientLight(new THREE.Color(), .25));
+    const skybox = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(),
+        new THREE.MeshBasicMaterial({ color: 0x505050, transparent: true, opacity: .995, side: THREE.BackSide }),
+    );
+    skybox.scale.set(5, 5, 5);
+    skybox.position.set(0, 1, 0);
+    scene.add(skybox);
+
+    const controllerModelFactory = new XRControllerModelFactory();
+    const controllerGrip1 = renderer.xr.getControllerGrip( 0 );
+    controllerGrip1.add( controllerModelFactory.createControllerModel( controllerGrip1 ) );
+    scene.add( controllerGrip1 );
+
+    const controllerGrip2 = renderer.xr.getControllerGrip( 1 );
+    controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
+    scene.add( controllerGrip2 );
+
+
+    camera.add(new THREE.DirectionalLight(new THREE.Color(), Math.PI));
+    scene.add(new THREE.AmbientLight(new THREE.Color(), .25 * Math.PI));
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.maxDistance = 10;
@@ -185,8 +205,18 @@ export default async function start() {
     function update_xr(dt) {
         const camera = renderer.xr.getCamera();
 
+        // renderer.setClearColor("black", .9);
+
         rotation.identity().extractRotation(camera.matrixWorld);
         ray.direction.set(0, 0, -1).applyMatrix4(rotation);
         ray.origin.setFromMatrixPosition(camera.matrixWorld);
+
+        target.setFromMatrixPosition(camera.matrixWorld);
+        const test = skybox.getWorldPosition(new THREE.Vector3());
+        target.sub(test);
+
+        const d = target.length();
+        const u = Math.min(Math.max(d - .5, 0), 1);
+        skybox.material.opacity = (1 - u) * (1 - u);
     }
 }
