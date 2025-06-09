@@ -4,7 +4,7 @@ import * as THREE from 'https://unpkg.com/three@0.177.0/build/three.module.js';
 import Stats from "stats";
 import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
-import { decode } from "./convert.js";
+import { base64ToBytes, decode } from "./convert.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
 import { XRControllerModelFactory } from 'https://unpkg.com/three@0.177.0/examples/jsm/webxr/XRControllerModelFactory.js';
@@ -19,6 +19,7 @@ const elementColors = new Map([
     [7, new THREE.Color("blue")],
     [8, new THREE.Color("red")],
 ]);
+
 
 export default async function start() {
     /** @type {{ traj: any, renderer: NaiveRenderer }[]} */
@@ -73,6 +74,13 @@ export default async function start() {
     controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
     scene.add( controllerGrip2 );
 
+    controllerGrip1.addEventListener( 'connected', ( event )=> {
+        if('gamepad' in event.data){
+            if('axes' in event.data.gamepad){ //we have a modern controller
+                controllerGrip1.gamepad = event.data.gamepad;
+            }
+        }
+    });
 
     camera.add(new THREE.DirectionalLight(new THREE.Color(), Math.PI));
     scene.add(new THREE.AmbientLight(new THREE.Color(), .25 * Math.PI));
@@ -87,11 +95,11 @@ export default async function start() {
     const c = new THREE.Color();
     function make_color(traj, i) {
         c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
-        c.lerp(elementColors.get(traj.topology.elements[i]), .65);
+        c.lerp(elementColors.get(traj.topology.elements[i]) ?? "pink", .65);
         return c
     }
 
-    const fileCount = 7;
+    const fileCount = 1;
 
     for (let i = 0; i < fileCount; ++i) {
         const path = `./data/ludo-gluhut-${i}.json`;
@@ -117,6 +125,58 @@ export default async function start() {
             );
         });
     }
+
+    const live = new NaiveRenderer();//{ atomLimit: 1024 * 1, bondLimit: 1024 * 1 });
+    live.atomsMesh.frustrumCulled = false;
+    live.bondsMesh.frustrumCulled = false;
+    objects.add(live);
+
+    function test_websocket() {
+        // Create WebSocket connection.
+        const socket = new WebSocket("ws://localhost:8000");
+
+        // Connection opened
+        socket.addEventListener("open", (event) => {
+            socket.send("Hello Server!");
+        });
+
+        socket.addEventListener("close", (event) => {
+            debug.textContent = "CLOSE " + event.code;
+        });
+
+        // Listen for messages
+        socket.addEventListener("message", (event) => {
+            debug.textContent = "MESSAGE";
+            try {
+                const data = JSON.parse(event.data);
+
+                const elements = new Uint8Array(base64ToBytes(data.topology.elements).buffer);
+                const bonds = new Uint32Array(base64ToBytes(data.topology.bonds).buffer);
+                const positions = new Float32Array(base64ToBytes(data.positions).buffer);
+
+                const traj = {
+                    topology: { elements, bonds, },
+                }
+
+                const atomCount = positions.length / 3;
+                const colors = new Float32Array(atomCount * 3);
+                for (let j = 0; j < atomCount; ++j) {
+                    make_color(traj, j);
+                    c.toArray(colors, j * 3);
+                }
+
+                live.setData(
+                    positions,
+                    colors,
+                    bonds,
+                );
+            } catch (e) {
+                debug.textContent = e.toString();
+            }
+        });
+    }
+
+    test_websocket();
 
     function frame_positions_index(index) {
         const sum = new THREE.Vector3();
@@ -202,6 +262,9 @@ export default async function start() {
         UPDATE_VIEWPORT();
     }
 
+    const debug = html("div", { style: "position: absolute; top: 0; left: 100px" }, "TEST");
+    document.body.append(debug);
+
     function update_xr(dt) {
         const camera = renderer.xr.getCamera();
 
@@ -218,5 +281,13 @@ export default async function start() {
         const d = target.length();
         const u = Math.min(Math.max(d - .5, 0), 1);
         skybox.material.opacity = (1 - u) * (1 - u);
+
+        debug.textContent = JSON.stringify(`${controllerGrip1.gamepad}`);
+
+        try {
+            skybox.material.opacity = Math.max(controllerGrip1.gamepad.axes[2], 0);
+        } catch (e) {
+            debug.textContent = e.toString();
+        }
     }
 }

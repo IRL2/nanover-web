@@ -36,6 +36,7 @@ class NaiveRenderer extends THREE.Object3D {
             this.material,
             options.atomLimit,
         );
+        this.atomsMesh.count = 0;
         this.add(this.atomsMesh);
 
         this.bondsMesh = new THREE.InstancedMesh(
@@ -43,6 +44,7 @@ class NaiveRenderer extends THREE.Object3D {
             this.material,
             options.bondLimit,
         );
+        this.bondsMesh.count = 0;
         this.add(this.bondsMesh);
 
         /** @type {ArrayLike<number>} */
