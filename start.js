@@ -4,7 +4,6 @@ import * as THREE from "three";
 import Stats from "stats";
 import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
-import { decode } from "./convert.js";
 
 import { OrbitControls } from 'https://unpkg.com/three@0.119.1/examples/jsm/controls/OrbitControls.js';
 import NaiveRenderer from "./NaiveRenderer.js";
@@ -40,6 +39,8 @@ export default async function start() {
 
     //
 
+    const myWorker = new Worker("worker.js", { type: "module" });
+
     const clock = new THREE.Clock();
 
     const scene = new THREE.Scene();
@@ -58,7 +59,7 @@ export default async function start() {
     scene.add(new THREE.AmbientLight(new THREE.Color(), .25));
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.maxDistance = 10;
+    controls.maxDistance = .5;
     controls.target.set(0, 1, 0);
     controls.update();
 
@@ -71,31 +72,38 @@ export default async function start() {
         return c
     }
 
+    const channel = new MessageChannel();
+    myWorker.postMessage({ port: channel.port2 }, { transfer: [channel.port2] });
+
+    channel.port1.addEventListener("message", (event) => {
+        const { traj } = event.data;
+        const renderer = new NaiveRenderer();
+        objects.add(renderer);
+
+        pairs.push({ traj, renderer });
+
+        const atomCount = traj.positions[0].length / 3;
+
+        const colors = new Float32Array(traj.positions[0].length);
+        for (let j = 0; j < atomCount; ++j) {
+            make_color(traj, j).toArray(colors, j * 3);
+            // c.setHSL(i / fileCount, .75, .5);
+            // c.toArray(colors, j * 3);
+        }
+
+        renderer.setData(
+            traj.positions[0],
+            colors,
+            traj.topology.bonds,
+        );
+    });
+    channel.port1.start();
+
     const fileCount = 7;
 
     for (let i = 0; i < fileCount; ++i) {
         const path = `./data/ludo-gluhut-${i}.json`;
-        fetch(path).then((r) => r.json()).then(decode).then((traj) => {
-            const renderer = new NaiveRenderer();
-            objects.add(renderer);
-
-            pairs.push({ traj, renderer });
-
-            const atomCount = traj.positions[0].length / 3;
-
-            const colors = new Float32Array(traj.positions[0].length);
-            for (let j = 0; j < atomCount; ++j) {
-                make_color(traj, j).toArray(colors, j * 3);
-                // c.setHSL(i / fileCount, .75, .5);
-                // c.toArray(colors, j * 3);
-            }
-
-            renderer.setData(
-                traj.positions[0],
-                colors,
-                traj.topology.bonds,
-            );
-        });
+        channel.port1.postMessage({ path });
     }
 
     function frame_positions_index(index) {
