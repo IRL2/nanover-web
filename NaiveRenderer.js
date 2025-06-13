@@ -1,6 +1,6 @@
 "use strict";
 
-import * as THREE from 'https://unpkg.com/three@0.177.0/build/three.module.js';
+import * as THREE from "three";
 
 const DEFAULT_OPTIONS = {
     atomLimit: 2048,
@@ -37,6 +37,7 @@ class NaiveRenderer extends THREE.Object3D {
             options.atomLimit,
         );
         this.atomsMesh.count = 0;
+        this.atomsMesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
         this.add(this.atomsMesh);
 
         this.bondsMesh = new THREE.InstancedMesh(
@@ -45,6 +46,7 @@ class NaiveRenderer extends THREE.Object3D {
             options.bondLimit,
         );
         this.bondsMesh.count = 0;
+        this.bondsMesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 100);
         this.add(this.bondsMesh);
 
         /** @type {ArrayLike<number>} */

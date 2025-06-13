@@ -1,6 +1,6 @@
 "use strict";
 
-import * as THREE from 'https://unpkg.com/three@0.177.0/build/three.module.js';
+import * as THREE from "three";
 import Stats from "stats";
 import { XRButton } from './XRButton.js';
 import { html } from "./utility.js";
@@ -64,6 +64,7 @@ export default async function start() {
     skybox.scale.set(5, 5, 5);
     skybox.position.set(0, 1, 0);
     scene.add(skybox);
+    skybox.visible = false;
 
     const controllerModelFactory = new XRControllerModelFactory();
     const controllerGrip1 = renderer.xr.getControllerGrip( 0 );
@@ -95,88 +96,172 @@ export default async function start() {
     const c = new THREE.Color();
     function make_color(traj, i) {
         c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
-        c.lerp(elementColors.get(traj.topology.elements[i]) ?? "pink", .65);
+        c.lerp(elementColors.get(traj.topology.elements[i]) ?? c, .65);
         return c
     }
 
-    const fileCount = 1;
+    const trajLoaderWorker = new Worker("traj-loader-worker.js", { type: "module" });
+    const channel = new MessageChannel();
+    trajLoaderWorker.postMessage({ port: channel.port2 }, { transfer: [channel.port2] });
+
+    channel.port1.addEventListener("message", (event) => {
+        const { traj } = event.data;
+        const renderer = new NaiveRenderer();
+        objects.add(renderer);
+
+        pairs.push({ traj, renderer });
+
+        const atomCount = traj.positions[0].length / 3;
+
+        const colors = new Float32Array(traj.positions[0].length);
+        for (let j = 0; j < atomCount; ++j) {
+            make_color(traj, j).toArray(colors, j * 3);
+            // c.setHSL(i / fileCount, .75, .5);
+            // c.toArray(colors, j * 3);
+        }
+
+        renderer.setData(
+            traj.positions[0],
+            colors,
+            traj.topology.bonds,
+        );
+    });
+    channel.port1.start();
+
+    const fileCount = 7;
 
     for (let i = 0; i < fileCount; ++i) {
         const path = `./data/ludo-gluhut-${i}.json`;
-        fetch(path).then((r) => r.json()).then(decode).then((traj) => {
-            const renderer = new NaiveRenderer();
-            objects.add(renderer);
-
-            pairs.push({ traj, renderer });
-
-            const atomCount = traj.positions[0].length / 3;
-
-            const colors = new Float32Array(traj.positions[0].length);
-            for (let j = 0; j < atomCount; ++j) {
-                make_color(traj, j).toArray(colors, j * 3);
-                // c.setHSL(i / fileCount, .75, .5);
-                // c.toArray(colors, j * 3);
-            }
-
-            renderer.setData(
-                traj.positions[0],
-                colors,
-                traj.topology.bonds,
-            );
-        });
+        channel.port1.postMessage({ path });
     }
 
-    const live = new NaiveRenderer();//{ atomLimit: 1024 * 1, bondLimit: 1024 * 1 });
-    live.atomsMesh.frustrumCulled = false;
-    live.bondsMesh.frustrumCulled = false;
+    const live = new NaiveRenderer({ atomLimit: 1024 * 8, bondLimit: 1024 * 8 });
     objects.add(live);
 
-    function test_websocket() {
-        // Create WebSocket connection.
-        const socket = new WebSocket("ws://localhost:8000");
+    const debug = html("div", { style: "position: absolute; top: 0; left: 100px" }, "TEST");
+    document.body.append(debug);
 
+    let socket;
+
+    function test_interaction(position) {
+        const interaction = { 
+            particles: [0, 1, 2, 3, 4, 5], 
+            position: [position.x, position.y, position.z],
+            max_force: 1000,
+            mass_weighted: true,
+            reset_velocities: false,
+            interaction_type: "spring",
+            scale: 100,
+        };
+        socket.send(JSON.stringify({ updates: { "interaction.TEST": interaction } }));
+    }
+
+    const boxMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(),
+        new THREE.MeshBasicMaterial({ color: "orange", side: THREE.BackSide, transparent: true, opacity: .5 }),
+    )
+    objects.add(boxMesh);
+    boxMesh.visible = false;
+
+    const boxWire = new THREE.LineSegments(new THREE.WireframeGeometry(boxMesh.geometry));
+    boxMesh.add(boxWire);
+
+    function test_websocket() {
+        const host = `wss://${location.hostname}`;
+        socket = new WebSocket(host);
+
+        debug.textContent = `HOST: ${host}`;
         // Connection opened
         socket.addEventListener("open", (event) => {
-            socket.send("Hello Server!");
+            debug.textContent = `CONNECT: ${host}`;
         });
 
         socket.addEventListener("close", (event) => {
-            debug.textContent = "CLOSE " + event.code;
+            debug.textContent = `CLOSE ${event.code} // HOST: ${host}`;
         });
+
+        socket.addEventListener("error", (event) => {
+            debug.textContent = `ERROR: ${host}`;
+        });
+
+        let counter = 0;
 
         // Listen for messages
         socket.addEventListener("message", (event) => {
-            debug.textContent = "MESSAGE";
+            // debug.textContent = "MESSAGE";
             try {
                 const data = JSON.parse(event.data);
 
-                const elements = new Uint8Array(base64ToBytes(data.topology.elements).buffer);
-                const bonds = new Uint32Array(base64ToBytes(data.topology.bonds).buffer);
-                const positions = new Float32Array(base64ToBytes(data.positions).buffer);
+                if (data.topology) {
+                    const elements = new Uint8Array(base64ToBytes(data.topology.elements).buffer);
+                    const bonds = new Uint32Array(base64ToBytes(data.topology.bonds).buffer);
 
-                const traj = {
-                    topology: { elements, bonds, },
+                    const traj = {
+                        topology: { elements, bonds, },
+                    }
+
+                    const atomCount = elements.length;
+                    const colors = new Float32Array(atomCount * 3);
+                    for (let j = 0; j < atomCount; ++j) {
+                        make_color(traj, j);
+                        c.toArray(colors, j * 3);
+                    }
+
+                    live.setData(
+                        new Array(atomCount * 3),
+                        colors,
+                        bonds,
+                    );
                 }
 
-                const atomCount = positions.length / 3;
-                const colors = new Float32Array(atomCount * 3);
-                for (let j = 0; j < atomCount; ++j) {
-                    make_color(traj, j);
-                    c.toArray(colors, j * 3);
+                if (data.positions) {
+                    const positions = new Float32Array(base64ToBytes(data.positions).buffer);
+                    live.setPositions(positions);
                 }
 
-                live.setData(
-                    positions,
-                    colors,
-                    bonds,
-                );
+                if (data.box) {
+                    const box = new Float32Array(base64ToBytes(data.box).buffer);
+                    const m = new THREE.Matrix3(...box);
+                    const x = new THREE.Vector3();
+                    const y = new THREE.Vector3();
+                    const z = new THREE.Vector3();
+                    m.extractBasis(x, y, z);
+
+                    const scale = new THREE.Vector3(x.length(), y.length(), z.length());
+                    boxMesh.geometry = new THREE.BoxGeometry(scale.x, scale.y, scale.z);
+                    scale.multiplyScalar(.5);
+                    boxMesh.geometry.translate(scale.x, scale.y, scale.z);
+                    boxMesh.visible = true;
+
+                    boxWire.geometry = new THREE.WireframeGeometry(boxMesh.geometry);
+
+                    objects.position.set(0, 1, 0);
+                    const test = new THREE.Vector3();
+                    boxMesh.getWorldPosition(test);
+                    objects.position.sub(scale.multiplyScalar(objects.scale.x));
+                    objects.position.sub(test).y += 1;
+                }
+
+                if (renderer.xr.isPresenting && counter > 10) {
+                    const m = boxMesh.matrixWorld.clone().invert();
+                    target.setFromMatrixPosition(camera.matrixWorld);
+                    target.applyMatrix4(m);
+                    test_interaction(target);
+                    counter = 0;
+                } else {
+                    counter += 1;
+                }
             } catch (e) {
-                debug.textContent = e.toString();
+                // debug.textContent = e.toString();
             }
         });
     }
 
-    test_websocket();
+    try {
+        test_websocket();
+    } catch (e) {
+        debug.textContent = e.toString();
+    }
 
     function frame_positions_index(index) {
         const sum = new THREE.Vector3();
@@ -203,7 +288,7 @@ export default async function start() {
         objects.position.set(0, 1, 0).sub(sum);
         controls.update();
     }
-    frame_positions_index(0);
+    // frame_positions_index(0);
 
     // control loop
     function animate() {
@@ -220,6 +305,17 @@ export default async function start() {
 
         if (renderer.xr.isPresenting) {
             update_xr(dt);
+        } else {
+            target.setFromMatrixPosition(camera.matrixWorld);
+            const test = boxMesh.getWorldPosition(new THREE.Vector3());
+            target.sub(test);
+
+            boxMesh.getWorldScale(test);
+            const s = test.x;
+
+            const d = target.length();
+            const u = Math.min(Math.max(d - s - .5, 0), 1);
+            boxMesh.material.opacity = (1 - u) * (1 - u) * .5;
         }
 
         renderer.render(scene, camera);
@@ -262,9 +358,6 @@ export default async function start() {
         UPDATE_VIEWPORT();
     }
 
-    const debug = html("div", { style: "position: absolute; top: 0; left: 100px" }, "TEST");
-    document.body.append(debug);
-
     function update_xr(dt) {
         const camera = renderer.xr.getCamera();
 
@@ -275,19 +368,20 @@ export default async function start() {
         ray.origin.setFromMatrixPosition(camera.matrixWorld);
 
         target.setFromMatrixPosition(camera.matrixWorld);
-        const test = skybox.getWorldPosition(new THREE.Vector3());
+        const test = boxMesh.getWorldPosition(new THREE.Vector3());
         target.sub(test);
 
         const d = target.length();
         const u = Math.min(Math.max(d - .5, 0), 1);
         skybox.material.opacity = (1 - u) * (1 - u);
+        boxMesh.material.opacity = (1 - u) * (1 - u) * .5;
 
-        debug.textContent = JSON.stringify(`${controllerGrip1.gamepad}`);
+        // debug.textContent = JSON.stringify(`${controllerGrip1.gamepad}`);
 
         try {
-            skybox.material.opacity = Math.max(controllerGrip1.gamepad.axes[2], 0);
+            //skybox.material.opacity = Math.max(controllerGrip1.gamepad.axes[2], 0);
         } catch (e) {
-            debug.textContent = e.toString();
+            // debug.textContent = e.toString();
         }
     }
 }
