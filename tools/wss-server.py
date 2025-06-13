@@ -9,6 +9,7 @@ from nanover.trajectory.frame_data import PARTICLE_POSITIONS
 from nanover.state.state_dictionary import DictionaryChange
 from MDAnalysis import AtomGroup
 from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
+from nanover.utilities.timing import yield_interval
 
 from converter import base64, frame_to_web, make_topology, make_positions
 
@@ -51,22 +52,15 @@ async def forward_frames(client, websocket):
 
     await websocket.send(json.dumps(data))
 
-    prev_time = 0
     while True:
         frame = client.current_frame
-        if frame.simulation_time > prev_time is not None and PARTICLE_POSITIONS in frame:
-            prev_time = frame.simulation_time
-            
-            t1 = time.monotonic_ns()
+        if PARTICLE_POSITIONS in frame:
+            # print("FRAME")
             universe = frame_data_to_mdanalysis(frame)
             selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
             data = { "positions": make_positions(c * .1 for c in selection.positions.flat) }
-            t2 = time.monotonic_ns()
             await websocket.send(json.dumps(data))
-            
-            print((t2-t1) * .001 * 0.001)
-        else:
-            await asyncio.sleep(.01)
+        await asyncio.sleep(1/30)
 
 
 async def send_frames(websocket):
