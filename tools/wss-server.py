@@ -9,13 +9,8 @@ from nanover.trajectory.frame_data import PARTICLE_POSITIONS
 from nanover.state.state_dictionary import DictionaryChange
 from MDAnalysis import AtomGroup
 from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
-from nanover.utilities.timing import yield_interval
 
-from converter import base64, frame_to_web, make_topology, make_positions
-
-
-import time
-
+from converter import base64, make_topology, make_positions
 
 async def forward_user(client, websocket):
     while True:
@@ -75,6 +70,34 @@ async def send_frames(websocket):
         )
 
 
+async def run_discovery(websocket, data):
+    init = json.loads(await websocket.recv())
+    print(init, data)
+    await websocket.send(json.dumps(data))
+    await asyncio.Future()
+
+
+def get_local_ip():
+    import socket; 
+
+    def attempt():
+        yield from [
+            ip 
+            for ip in socket.gethostbyname_ex(socket.gethostname())[2] 
+            if not ip.startswith("127.")
+        ][:1]
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 53))
+        name = s.getsockname()[0]
+        s.close()
+        yield name
+
+    ip = next(attempt())
+
+    return ip
+
+
 async def main():
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_cert = Path(__file__).parent / "data/localhost.pem"
@@ -84,8 +107,22 @@ async def main():
     ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key, password="password")
     print(ssl_context)
 
-    async with websockets.serve(send_frames, "0.0.0.0", 443, ssl=ssl_context):
-        await asyncio.Future()  # Run forever
+    async with websockets.serve(send_frames, "0.0.0.0", 0, ssl=ssl_context) as server:
+        ip = get_local_ip()
+        port = server.sockets[0].getsockname()[1]
+
+        data = {
+            "name": "test server",
+            "web": f"https://{ip}:5500",
+            "endpoint": f"wss://{ip}:{port}",
+        }
+
+        async with websockets.connect("wss://irl-discovery.onrender.com/") as discovery:
+            await asyncio.gather(
+                run_discovery(discovery, data),
+                asyncio.Future(),
+            )
+
 
 
 if __name__ == "__main__":

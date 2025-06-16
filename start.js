@@ -104,9 +104,19 @@ export default async function start() {
     const trajLoaderChannel = new MessageChannel();
     trajLoaderWorker.postMessage({ port: trajLoaderChannel.port2 }, { transfer: [trajLoaderChannel.port2] });
 
+    const test = fetch("https://irl-discovery.onrender.com/list").then((r) => r.json());
+
     const websocketWorker = new Worker("websocket-worker.js", { type: "module" });
     const framesChannel = new MessageChannel();
-    websocketWorker.postMessage({ port: framesChannel.port2, host: `wss://${location.hostname}` }, { transfer: [framesChannel.port2] });
+
+    test.then((list) => {
+        const [ code, data ] = list[0];
+        console.log("CONNECT TO", code, data);
+
+        // data.endpoint = `wss://${location.hostname}`;
+
+        websocketWorker.postMessage({ port: framesChannel.port2, host: data.endpoint }, { transfer: [framesChannel.port2] });
+    });
 
     trajLoaderChannel.port1.addEventListener("message", (event) => {
         const { traj } = event.data;
