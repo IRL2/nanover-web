@@ -2,10 +2,13 @@ import GUI from 'lil-gui'
 import {
   AmbientLight,
   BackSide,
+  BoxGeometry,
   Color,
   DirectionalLight,
   IcosahedronGeometry,
+  LineSegments,
   LoadingManager,
+  Matrix3,
   Mesh,
   MeshBasicMaterial,
   Object3D,
@@ -13,6 +16,7 @@ import {
   Scene,
   Vector3,
   WebGLRenderer,
+  WireframeGeometry,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import Stats from 'stats.js'
@@ -36,6 +40,7 @@ let cameraControls: OrbitControls
 let stats: Stats
 let gui: GUI
 let objects: Object3D
+let live: NaiveRenderer;
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
 
@@ -79,26 +84,29 @@ function init() {
   {
     objects = new Object3D();
     scene.add(objects);
+    live = new NaiveRenderer();
+    objects.add(live);
+  }
+
+
+  const elementColors = new Map([
+    [1, new Color("white")],
+    [6, new Color("black")],
+    [7, new Color("blue")],
+    [8, new Color("red")],
+  ]);
+
+  const c = new Color();
+  function make_color(traj: TestTrajectory, i: number) {
+    c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
+    c.lerp(elementColors.get(traj.topology.elements[i]) ?? c, .65);
+    return c
   }
 
   const trajLoaderChannel = new MessageChannel();
   {
-    const trajLoaderWorker = new Worker(new URL("nanover/workers/traj-loader-worker.js", import.meta.url), { type: "module" });
+    const trajLoaderWorker = new Worker(new URL("nanover/workers/traj-loader-worker.ts", import.meta.url), { type: "module" });
     trajLoaderWorker.postMessage({ port: trajLoaderChannel.port2 }, { transfer: [trajLoaderChannel.port2] });
-
-    const elementColors = new Map([
-      [1, new Color("white")],
-      [6, new Color("black")],
-      [7, new Color("blue")],
-      [8, new Color("red")],
-    ]);
-
-    const c = new Color();
-    function make_color(traj: TestTrajectory, i: number) {
-      c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
-      c.lerp(elementColors.get(traj.topology.elements[i]) ?? c, .65);
-      return c
-    }
 
     trajLoaderChannel.port1.addEventListener("message", (event) => {
       const { traj } = event.data as SendMessageData;
@@ -185,17 +193,83 @@ function init() {
 
   // ==== 🐞 DEBUG GUI ====
   {
+    const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
+    const framesChannel = new MessageChannel();
+
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
+
+    function connect(host: string) {
+      websocketWorker.postMessage({ port: framesChannel.port2, host }, { transfer: [framesChannel.port2] });
+    }
+
+    const boxMesh = new Mesh(
+      new BoxGeometry(),
+      new MeshBasicMaterial({ color: "orange", side: BackSide, transparent: true, opacity: .5 }),
+    )
+    objects.add(boxMesh);
+    boxMesh.visible = false;
+
+    const boxWire = new LineSegments(new WireframeGeometry(boxMesh.geometry));
+    boxMesh.add(boxWire);
+
+    framesChannel.port1.addEventListener("message", (event) => {
+      const { frame } = event.data;
+
+      if (frame.topology) {
+        console.log(frame.topology);
+        const atomCount = frame.topology.elements.length;
+        const colors = new Float32Array(atomCount * 3);
+        for (let j = 0; j < atomCount; ++j) {
+          make_color(frame, j);
+          c.toArray(colors, j * 3);
+        }
+
+        live.setData(
+          new Array(atomCount * 3),
+          colors,
+          frame.topology.bonds,
+        );
+      }
+
+      if (frame.positions) {
+        live.setPositions(frame.positions);
+      }
+
+      if (frame.box) {
+        const m = new Matrix3(...frame.box);
+        const x = new Vector3();
+        const y = new Vector3();
+        const z = new Vector3();
+        m.extractBasis(x, y, z);
+
+        const scale = new Vector3(x.length(), y.length(), z.length());
+        boxMesh.geometry = new BoxGeometry(scale.x, scale.y, scale.z);
+        scale.multiplyScalar(.5);
+        boxMesh.geometry.translate(scale.x, scale.y, scale.z);
+        boxMesh.visible = true;
+
+        boxWire.geometry = new WireframeGeometry(boxMesh.geometry);
+
+        objects.position.set(0, 1, 0);
+        const test = new Vector3();
+        boxMesh.getWorldPosition(test);
+        objects.position.sub(scale.multiplyScalar(objects.scale.x));
+        objects.position.sub(test).y += 1;
+      }
+    });
+    framesChannel.port1.start();
 
     const refresh = () => {
       const test = fetch("https://irl-discovery.onrender.com/list").then((r) => r.json());
+      servers.destroy();
+      servers = discoveryFolder.addFolder("Servers");
 
       test.then((list) => {
-        servers.destroy();
-        servers = discoveryFolder.addFolder("Servers");
-
         if (list.length > 0) {
-          servers.add({ click: () => { } }, "click").name("TEST");
+          console.log(list);
+          for (const [ , data ] of list) {
+            servers.add({ click: () => connect(data.endpoint) }, "click").name(data.name);
+          }
           servers.open();
         } else {
           servers.close();
