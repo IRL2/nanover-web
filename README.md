@@ -1,18 +1,72 @@
-# NanoVer Web
+Github-CI: [![Build Status][build_status]][build_link]
 
-A proof of concept or prototype of NanoVer for the browser and WebXR.
+[build_status]: ./../../actions/workflows/build.yml/badge.svg
+[build_link]: ./../../actions/workflows/build.yml
 
-## Developer setup
+# Three.js Vite Template with TypeScript
 
-### Desktop browser
+Three.js + Vite + TypeScript starter
 
- * Install Visual Studio Code IDE: https://code.visualstudio.com/
- * Install Live Server extension: https://marketplace.visualstudio.com/items?itemName=ritwickdey.LiveServer
- * Clone this git repository and open the root folder in VS Code
- * Click "Go Live" in the bottom right corner, and begin developing
+- [Demo](../../deployments/github-pages)
+- [Jump to CLI commands](#cli-commands)
 
-### WebXR and headset
+---
+![screenshot](docs/preview.png)
 
-For security, WebXR requires that the page be served over HTTPS, so you will need to configure the Live Server extension to use an SSL certificate.
+---
 
-To do so, follow these instructions, noting that on windows you should prefix openssl commands on windows with `winpty` (e.g `winpty openssl genrsa -aes256 -out localhost.key 2048`): https://graceydev.hashnode.dev/enabling-https-for-live-server-visual-studio-code-extension
+## Tech Stack
+
+- Three.js
+- TypeScript
+- Vite
+
+## Stuff included in the `scene.ts`
+
+- [x] Geometry
+- [x] Material
+- [x] Mesh
+- [x] Ambient Light
+- [x] Point Light
+- [x] Camera
+- [x] Scene
+- [x] Canvas
+- [x] Renderer (WebGL)
+- [x] Loading Manager
+- [x] Orbit Controls
+- [x] Drag Controls
+- [x] Grid
+- [x] Antialias enabled
+- [x] Transparent canvas
+- [x] Responsive renderer and camera (to canvas size)
+- [x] Animation Loop
+- [x] Shadows
+- [x] Stats (FPS, ms)
+- [x] Full screen (double-click on canvas)
+- [x] Debug GUI
+
+## CLI Commands
+
+Installation
+
+```bash
+npm i
+```
+
+Run dev mode
+
+```bash
+npm run dev
+```
+
+Build
+
+```bash
+npm run build
+```
+
+Run build
+
+```bash
+npm run preview
+```
