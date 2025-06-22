@@ -10,7 +10,7 @@ export type RecvMessageData = {
 }
 
 export type SendMessageData = {
-  frame: TestFrame;
+  frame: Partial<TestFrame>;
 }
 
 onmessage = (event) => {

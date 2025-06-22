@@ -24,10 +24,10 @@ export type TestFrameData = {
 }
 
 export type TestFrame = {
-  topology?: {
+  topology: {
     elements: Uint8Array;
     bonds: Uint32Array;
   }
-  positions?: Float32Array;
-  box?: Float32Array;
+  positions: Float32Array;
+  box: Float32Array;
 }

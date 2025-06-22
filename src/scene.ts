@@ -97,7 +97,7 @@ function init() {
   ]);
 
   const c = new Color();
-  function make_color(traj: TestTrajectory, i: number) {
+  function make_color(traj: Pick<TestTrajectory, "topology">, i: number) {
     c.setHSL((i / traj.topology.elements.length) + Math.random() * .1, .25, .5);
     c.lerp(elementColors.get(traj.topology.elements[i]) ?? c, .65);
     return c
@@ -213,14 +213,13 @@ function init() {
     boxMesh.add(boxWire);
 
     framesChannel.port1.addEventListener("message", (event) => {
-      const { frame } = event.data;
+      const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
 
       if (frame.topology) {
-        console.log(frame.topology);
         const atomCount = frame.topology.elements.length;
         const colors = new Float32Array(atomCount * 3);
         for (let j = 0; j < atomCount; ++j) {
-          make_color(frame, j);
+          make_color({ topology: frame.topology }, j);
           c.toArray(colors, j * 3);
         }
 
@@ -236,6 +235,7 @@ function init() {
       }
 
       if (frame.box) {
+        // @ts-ignore
         const m = new Matrix3(...frame.box);
         const x = new Vector3();
         const y = new Vector3();
