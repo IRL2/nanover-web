@@ -3,70 +3,59 @@ Github-CI: [![Build Status][build_status]][build_link]
 [build_status]: ./../../actions/workflows/build.yml/badge.svg
 [build_link]: ./../../actions/workflows/build.yml
 
-# Three.js Vite Template with TypeScript
+# NanoVer Web
 
-Three.js + Vite + TypeScript starter
+A proof of concept or prototype of NanoVer for the browser and WebXR.
 
-- [Demo](../../deployments/github-pages)
-- [Jump to CLI commands](#cli-commands)
+## Developer setup
 
----
-![screenshot](docs/preview.png)
+### Install (Windows)
 
----
+Install [node.js](https://nodejs.org/), [git](https://git-scm.com/), [Visual Studio Code](https://code.visualstudio.com/).
 
-## Tech Stack
-
-- Three.js
-- TypeScript
-- Vite
-
-## Stuff included in the `scene.ts`
-
-- [x] Geometry
-- [x] Material
-- [x] Mesh
-- [x] Ambient Light
-- [x] Point Light
-- [x] Camera
-- [x] Scene
-- [x] Canvas
-- [x] Renderer (WebGL)
-- [x] Loading Manager
-- [x] Orbit Controls
-- [x] Drag Controls
-- [x] Grid
-- [x] Antialias enabled
-- [x] Transparent canvas
-- [x] Responsive renderer and camera (to canvas size)
-- [x] Animation Loop
-- [x] Shadows
-- [x] Stats (FPS, ms)
-- [x] Full screen (double-click on canvas)
-- [x] Debug GUI
-
-## CLI Commands
-
-Installation
-
-```bash
-npm i
+```PowerShell
+winget install -e --id OpenJS.NodeJS
+winget install -e --id Git.Git
+winget install -e --id Microsoft.VisualStudioCode
 ```
 
-Run dev mode
+Clone this repo and install its dependencies:
+
+```PowerShell
+git clone https://github.com/IRL2/nanover-web.git
+cd nanover-web
+npm install
+```
+
+### Developing
+
+Run a live server that opens a new browser tab and refreshes when you edit the code:
 
 ```bash
 npm run dev
 ```
 
-Build
+Build the standalone web package:
 
 ```bash
 npm run build
 ```
 
-Run build
-
+Preview the standalone web package:
 ```bash
 npm run preview
+```
+
+### WebXR and headset
+
+For security, WebXR requires that the page be served over HTTPS, so you will need to configure the Live Server extension to use an SSL certificate.
+
+To do so, install [OpenSSL](https://slproweb.com/products/Win32OpenSSL.html#downloads), and generate a private key and certificate:
+
+* Either choose "nanover" as the passphrase or update it later in [the vite config](./vite.config.js)
+* Skip all data input except `common name` which should be `localhost`
+
+```
+openssl genrsa -aes256 -out localhost.key 2048
+openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out localhost.pem
 ```

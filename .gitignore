@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 *.pyc
+
+# ssl
+localhost.key
+localhost.pem

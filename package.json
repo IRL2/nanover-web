@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host --open",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview --host --open"
   },
   "devDependencies": {
     "@types/three": "^0.177.0",
