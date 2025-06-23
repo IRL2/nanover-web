@@ -296,7 +296,7 @@ function init() {
         pairs.length = 0;
 
         for (let path of paths) {
-          path = "/data/" + path;
+          path = new URL("./data/" + path, window.location.href).toString();
           trajLoaderChannel.port1.postMessage({ path });
         }
       }
