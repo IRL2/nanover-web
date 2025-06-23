@@ -100,24 +100,24 @@ def get_local_ip():
 
 async def main():
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    # ssl_cert = Path(__file__).parent / "data/localhost.pem"
-    # ssl_key = Path(__file__).parent / "data/localhost.key"
+    ssl_key = Path(__file__).parent / "../localhost.key"
+    ssl_cert = Path(__file__).parent / "../localhost.pem"
 
-    # ssl_context.load_verify_locations(ssl_cert)
-    # ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key, password="password")
+    ssl_context.load_verify_locations(ssl_cert)
+    ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key, password="nanover")
     print(ssl_context)
 
-    async with websockets.serve(send_frames, "0.0.0.0", 0) as server:
+    async with websockets.serve(send_frames, "0.0.0.0", 0, ssl=ssl_context) as server:
         ip = get_local_ip()
         port = server.sockets[0].getsockname()[1]
 
         data = {
             "name": "test server",
             "web": f"https://{ip}:5500",
-            "endpoint": f"ws://{ip}:{port}",
+            "endpoint": f"wss://{ip}:{port}",
         }
 
-        async with websockets.connect("wss://irl-discovery.onrender.com/") as discovery:
+        async with websockets.connect("wss://irl-discovery.onrender.com/", open_timeout=5) as discovery:
             await asyncio.gather(
                 run_discovery(discovery, data),
                 asyncio.Future(),
