@@ -1,8 +1,9 @@
-import GUI from 'lil-gui'
+import GUI, { Controller } from 'lil-gui'
 import {
   AmbientLight,
   BackSide,
   BoxGeometry,
+  Clock,
   Color,
   DirectionalLight,
   IcosahedronGeometry,
@@ -41,6 +42,10 @@ let stats: Stats
 let gui: GUI
 let objects: Object3D
 let live: NaiveRenderer;
+let frameSeek: Controller;
+let framePlay: Controller;
+let frameTimer = 0.0;
+const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
 
@@ -283,26 +288,33 @@ function init() {
       { name: "Nanotube", paths: ["webtraj.json"] },
     ];
 
+    function loadTrajectories(paths: string[]) {
+      for (const { renderer } of pairs) {
+        renderer.removeFromParent();
+      }
+      pairs.length = 0;
+
+      for (let path of paths) {
+        path = new URL("./data/" + path, window.location.href).toString();
+        trajLoaderChannel.port1.postMessage({ path });
+      }
+    }
+
     const discoveryFolder = gui.addFolder("Discovery");
     discoveryFolder.add({ refresh }, "refresh").name("Refresh");
     let servers = discoveryFolder.addFolder("Servers");
 
     const trajectoryFolder = gui.addFolder("Trajectories");
     for (const { name, paths } of trajpaths) {
-      function load() {
-        for (const { renderer } of pairs) {
-          renderer.removeFromParent();
-        }
-        pairs.length = 0;
-
-        for (let path of paths) {
-          path = new URL("./data/" + path, window.location.href).toString();
-          trajLoaderChannel.port1.postMessage({ path });
-        }
-      }
-
-      trajectoryFolder.add({ load }, "load").name(name);
+      trajectoryFolder.add({ load: () => loadTrajectories(paths) }, "load").name(name);
     }
+
+    frameSeek = trajectoryFolder.add({ frame: 0 }, "frame", 0, 1, 1).name("Frame");
+    framePlay = trajectoryFolder.add({ play: true }, "play").name("Play");
+
+    frameSeek.$widget.onpointerdown = () => framePlay.setValue(false);
+
+    loadTrajectories(trajpaths[1].paths);
 
     // persist GUI state in local storage on changes
     gui.onFinishChange(() => {
@@ -320,8 +332,6 @@ function init() {
       gui.reset()
     }
     gui.add({ resetGui }, 'resetGui').name('RESET')
-
-    gui.close()
   }
 }
 
@@ -352,11 +362,24 @@ function frame_positions_index(index: number) {
 }
 
 function animate() {
-  const max = Math.max(0, ...pairs.map(({ traj }) => traj.positions.length));
-  const frame = Math.floor((performance.now() / 1000 * 30 * 3) % max);
+  const dt = Math.min(1/15, frameClock.getDelta());
+
+  const max = Math.max(1, ...pairs.map(({ traj }) => traj.positions.length));
+
+  frameSeek.max(max);
+  
+  if (framePlay.getValue()) {
+    frameTimer += dt;
+    if (frameTimer > 1/30) {
+      frameTimer -= 1/30;
+      frameSeek.setValue((frameSeek.getValue() + 1) % max);
+    }
+  } else {
+    frameTimer = 0;
+  }
 
   if (pairs.length > 0) {
-    frame_positions_index(frame);
+    frame_positions_index(frameSeek.getValue());
   }
 
   stats.begin()
