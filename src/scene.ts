@@ -7,14 +7,18 @@ import {
   Color,
   DirectionalLight,
   IcosahedronGeometry,
+  InstancedMesh,
   LineSegments,
   LoadingManager,
   Matrix3,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   Object3D,
   PerspectiveCamera,
+  Quaternion,
   Scene,
+  Sphere,
   Vector3,
   WebGLRenderer,
   WireframeGeometry,
@@ -45,6 +49,12 @@ let live: NaiveRenderer;
 let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
+
+const avatars = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "red" }), 64);
+avatars.boundingSphere = new Sphere(new Vector3(), 100);
+const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
+interactions.boundingSphere = new Sphere(new Vector3(), 100);
+
 const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
@@ -87,10 +97,12 @@ function init() {
 
   // ===== 📦 OBJECTS =====
   {
+    scene.add(avatars);
     objects = new Object3D();
     scene.add(objects);
     live = new NaiveRenderer();
     objects.add(live);
+    objects.add(interactions);
   }
 
 
@@ -217,6 +229,11 @@ function init() {
     const boxWire = new LineSegments(new WireframeGeometry(boxMesh.geometry));
     boxMesh.add(boxWire);
 
+    const t = new Vector3();
+    const r = new Quaternion();
+    const s = new Vector3();
+    const m = new Matrix4();
+
     framesChannel.port1.addEventListener("message", (event) => {
       const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
 
@@ -255,11 +272,56 @@ function init() {
 
         boxWire.geometry = new WireframeGeometry(boxMesh.geometry);
 
-        objects.position.set(0, 1, 0);
-        const test = new Vector3();
-        boxMesh.getWorldPosition(test);
-        objects.position.sub(scale.multiplyScalar(objects.scale.x));
-        objects.position.sub(test).y += 1;
+        // objects.position.set(0, 1, 0);
+        // const test = new Vector3();
+        // boxMesh.getWorldPosition(test);
+        // objects.position.sub(scale.multiplyScalar(objects.scale.x));
+        // objects.position.sub(test).y += 1;
+      }
+
+      if (frame.state) {
+        avatars.count = 0;
+        avatars.instanceMatrix.needsUpdate = true;
+        interactions.count = 0;
+        interactions.instanceMatrix.needsUpdate = true;
+
+        if (frame.state.scene) {
+          t.fromArray(frame.state.scene, 0);
+          r.fromArray(frame.state.scene, 3);
+          s.fromArray(frame.state.scene, 7);
+          s.x *= -1;
+
+          objects.position.copy(t);
+          objects.rotation.setFromQuaternion(r);
+          objects.scale.copy(s);
+
+          cameraControls.target.copy(objects.position);
+          cameraControls.target.addScaledVector(objects.scale, -.5);
+          cameraControls.update();
+        }
+
+        for (const [key, value] of Object.entries(frame.state)) {
+          if (key.startsWith("interaction.") && frame.positions) {
+            t.fromArray(frame.positions, (value as any).particles[0] * 3);
+            r.identity();
+            s.set(.1, .1, .1);
+            m.compose(t, r, s);
+            interactions.setMatrixAt(interactions.count, m);
+            interactions.count += 1;
+          }
+
+          if (key.startsWith("avatar.")) {
+            for (const component of (value as any).components) {
+              // const id = `${key}.${component.name}`;
+              t.fromArray(component.position);
+              r.fromArray(component.rotation);
+              s.set(.05, .05, .05);
+              m.compose(t, r, s);
+              avatars.setMatrixAt(avatars.count, m);
+              avatars.count += 1;
+            }
+          }
+        }
       }
     });
     framesChannel.port1.start();
@@ -357,7 +419,7 @@ function frame_positions_index(index: number) {
   sum.divideScalar(count);
   sum.multiply(objects.scale);
 
-  objects.position.set(0, 1, 0).sub(sum);
+  // objects.position.set(0, 1, 0).sub(sum);
   cameraControls.update();
 }
 

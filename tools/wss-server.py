@@ -22,7 +22,6 @@ async def forward_user(client, websocket):
         client.attempt_update_multiplayer_state(change)
 
 
-
 async def forward_frames(client, websocket):
     limit = 8000
 
@@ -53,8 +52,13 @@ async def forward_frames(client, websocket):
             # print("FRAME")
             universe = frame_data_to_mdanalysis(frame)
             selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
-            data = { "positions": make_positions(c * .1 for c in selection.positions.flat) }
-            await websocket.send(json.dumps(data))
+            data = { 
+                "positions": make_positions(c * .1 for c in selection.positions.flat),
+                "state": client.latest_multiplayer_values,
+            }
+            text = json.dumps(data)
+            text = text.replace("Infinity", "null")
+            await websocket.send(text)
         await asyncio.sleep(1/30)
 
 
@@ -62,6 +66,7 @@ async def send_frames(websocket):
     with NanoverImdClient.autoconnect(name="ragzo: NanoVer iMD Server") as nanover_client:
         print("CONNECTED")
         nanover_client.subscribe_to_frames()
+        nanover_client.subscribe_multiplayer()
         nanover_client.wait_until_first_frame()
         
         await asyncio.gather(

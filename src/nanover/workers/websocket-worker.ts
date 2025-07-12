@@ -64,6 +64,10 @@ onmessage = (event) => {
       transfer.push(box.buffer);
     }
 
+    if (data.state) {
+      frame.state = data.state;
+    }
+
     port.postMessage({ frame } as SendMessageData, transfer);
   });
 };
