@@ -5,6 +5,7 @@ import {
   BoxGeometry,
   Clock,
   Color,
+  CylinderGeometry,
   DirectionalLight,
   IcosahedronGeometry,
   InstancedMesh,
@@ -50,10 +51,18 @@ let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
 
+
+const calibPoints: Mesh[] = [];
+let calibAnchor: XRAnchor | undefined;
+
+let calibratedSpace = new Object3D();
+
 const avatars = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "red" }), 64);
 avatars.boundingSphere = new Sphere(new Vector3(), 100);
+avatars.count = 0;
 const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
 interactions.boundingSphere = new Sphere(new Vector3(), 100);
+interactions.count = 0;
 
 const frameClock = new Clock();
 
@@ -72,8 +81,80 @@ function init() {
     renderer.setAnimationLoop(animate);
 
     renderer.xr.enabled = true;
-    // renderer.xr.addEventListener("sessionstart", enter_xr);
-    // renderer.xr.addEventListener("sessionend", exit_xr);
+    renderer.xr.addEventListener("sessionstart", enter_xr);
+    renderer.xr.addEventListener("sessionend", exit_xr);
+
+    function enter_xr() {
+      const session = renderer.xr.getSession()!;
+      console.log(session.enabledFeatures);
+      session.addEventListener('select', onSelect);
+    }
+
+    function exit_xr() {
+
+    }
+
+    function onSelect(event: XRInputSourceEvent) {
+      let frame = event.frame;
+      let inputSource = event.inputSource;
+
+      // if (session.enabledFeatures?.includes("anchors")) return;
+
+      const clickPose = event.frame.getPose(
+        event.inputSource.targetRaySpace,
+        renderer.xr.getReferenceSpace()!,
+      )!;
+
+      const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
+
+      const next = new Mesh(
+        new CylinderGeometry(),
+        new MeshBasicMaterial({ color: support ? "green" : "red" }),
+      );
+      next.position.copy(clickPose.transform.position);
+      next.position.y = 0.05;
+      next.scale.set(.05, .1, .05);
+      scene.add(next);
+      calibPoints.push(next);
+
+      if (calibPoints.length > 2) {
+        const prev = calibPoints.shift()!;
+        prev.removeFromParent();
+      }
+
+      if (calibPoints.length == 2) {
+        calibAnchor?.delete();
+        calibAnchor = undefined;
+        
+        const a = calibPoints[0].position;
+        const b = calibPoints[1].position;
+
+        const up = new Vector3(0, 1, 0);
+        const center = b.clone().lerp(a, .5);
+        const normal = up.clone().cross(b.clone().sub(a)).normalize();
+
+        const rotation = new Quaternion().setFromRotationMatrix(new Matrix4().lookAt(
+          center,
+          center.clone().add(normal),
+          up,
+        )).normalize();
+        const calibPose = new XRRigidTransform(center, rotation);
+
+        // Create a free-floating anchor.
+        frame.createAnchor!(calibPose, renderer.xr.getReferenceSpace()!)!.then((anchor) => {
+          calibAnchor = anchor;
+          const next = new Mesh(
+            new CylinderGeometry(),
+            new MeshBasicMaterial({ color: "magenta" }),
+          );
+          next.position.y = 0.05;
+          next.scale.set(.05, .1, .05);
+          calibratedSpace.add(next);
+        }, (error) => {
+          console.error("Could not create anchor: " + error);
+        });
+      }
+    }
   }
 
   // ===== 👨🏻‍💼 LOADING MANAGER =====
@@ -97,6 +178,7 @@ function init() {
 
   // ===== 📦 OBJECTS =====
   {
+    scene.add(calibratedSpace);
     scene.add(avatars);
     objects = new Object3D();
     scene.add(objects);
@@ -205,7 +287,7 @@ function init() {
     stats = new Stats()
     document.body.appendChild(stats.dom)
 
-    document.body.appendChild(XRButton.createButton(renderer));
+    document.body.appendChild(XRButton.createButton(renderer, { requiredFeatures: ["anchors"] }));
   }
 
   // ==== 🐞 DEBUG GUI ====
@@ -456,4 +538,12 @@ function animate() {
 
   renderer.render(scene, camera)
   stats.end()
+
+  if (renderer.xr.isPresenting && calibAnchor) {
+    const frame = renderer.xr.getFrame();
+    const pose = frame.getPose(calibAnchor.anchorSpace, renderer.xr.getReferenceSpace()!)!;
+    
+    calibratedSpace.position.copy(pose.transform.position);
+    calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
+  }
 }
