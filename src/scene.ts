@@ -96,7 +96,6 @@ function init() {
 
     function onSelect(event: XRInputSourceEvent) {
       let frame = event.frame;
-      let inputSource = event.inputSource;
 
       // if (session.enabledFeatures?.includes("anchors")) return;
 
@@ -179,9 +178,9 @@ function init() {
   // ===== 📦 OBJECTS =====
   {
     scene.add(calibratedSpace);
-    scene.add(avatars);
+    calibratedSpace.add(avatars);
     objects = new Object3D();
-    scene.add(objects);
+    calibratedSpace.add(objects);
     live = new NaiveRenderer();
     objects.add(live);
     objects.add(interactions);
@@ -545,5 +544,6 @@ function animate() {
     
     calibratedSpace.position.copy(pose.transform.position);
     calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
+    calibratedSpace.scale.x = -1;
   }
 }
