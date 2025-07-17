@@ -3,6 +3,7 @@ from pathlib import Path
 import websockets
 import ssl
 import json
+import aiohttp
 
 from nanover.app import NanoverImdClient
 from nanover.trajectory.frame_data import PARTICLE_POSITIONS
@@ -63,7 +64,7 @@ async def forward_frames(client, websocket):
 
 
 async def send_frames(websocket):
-    with NanoverImdClient.autoconnect(name="ragzo: NanoVer iMD Server") as nanover_client:
+    with NanoverImdClient.autoconnect(name="DEMO-general") as nanover_client:
         print("CONNECTED")
         nanover_client.subscribe_to_frames()
         nanover_client.subscribe_multiplayer()
@@ -89,7 +90,7 @@ def get_local_ip():
         yield from [
             ip 
             for ip in socket.gethostbyname_ex(socket.gethostname())[2] 
-            if not ip.startswith("127.")
+            if ip.startswith("192.")
         ][:1]
 
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -112,6 +113,12 @@ async def main():
     ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key, password="nanover")
     print(ssl_context)
 
+    print("POLLING DISCOVERY")
+    async with aiohttp.ClientSession() as session:
+        response = await session.get("https://irl-discovery.onrender.com/list")
+        print("list:", await response.json())
+
+    print("RUNNING SERVER")
     async with websockets.serve(send_frames, "0.0.0.0", 0, ssl=ssl_context) as server:
         ip = get_local_ip()
         port = server.sockets[0].getsockname()[1]
