@@ -59,3 +59,18 @@ To do so, install [OpenSSL](https://slproweb.com/products/Win32OpenSSL.html#down
 openssl genrsa -aes256 -out localhost.key 2048
 openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out localhost.pem
 ```
+
+### NanoVer server tests
+
+Install dependencies:
+```bash
+pip install websockets aiohttp
+```
+
+Run a NanoVer python server as usual (e.g with nanover-omni or a jupyter notebook).
+
+Run the websocket converter:
+```bash
+cd tools
+python wss-server.py
+```

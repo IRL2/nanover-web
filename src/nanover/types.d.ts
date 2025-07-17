@@ -21,6 +21,7 @@ export type TestFrameData = {
   }
   positions: string;
   box: string;
+  state: any;
 }
 
 export type TestFrame = {
@@ -30,4 +31,5 @@ export type TestFrame = {
   }
   positions: Float32Array;
   box: Float32Array;
+  state: any;
 }

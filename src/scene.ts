@@ -5,16 +5,21 @@ import {
   BoxGeometry,
   Clock,
   Color,
+  CylinderGeometry,
   DirectionalLight,
   IcosahedronGeometry,
+  InstancedMesh,
   LineSegments,
   LoadingManager,
   Matrix3,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   Object3D,
   PerspectiveCamera,
+  Quaternion,
   Scene,
+  Sphere,
   Vector3,
   WebGLRenderer,
   WireframeGeometry,
@@ -45,6 +50,20 @@ let live: NaiveRenderer;
 let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
+
+
+const calibPoints: Mesh[] = [];
+let calibAnchor: XRAnchor | undefined;
+
+let calibratedSpace = new Object3D();
+
+const avatars = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "red" }), 64);
+avatars.boundingSphere = new Sphere(new Vector3(), 100);
+avatars.count = 0;
+const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
+interactions.boundingSphere = new Sphere(new Vector3(), 100);
+interactions.count = 0;
+
 const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
@@ -62,8 +81,79 @@ function init() {
     renderer.setAnimationLoop(animate);
 
     renderer.xr.enabled = true;
-    // renderer.xr.addEventListener("sessionstart", enter_xr);
-    // renderer.xr.addEventListener("sessionend", exit_xr);
+    renderer.xr.addEventListener("sessionstart", enter_xr);
+    renderer.xr.addEventListener("sessionend", exit_xr);
+
+    function enter_xr() {
+      const session = renderer.xr.getSession()!;
+      console.log(session.enabledFeatures);
+      session.addEventListener('select', onSelect);
+    }
+
+    function exit_xr() {
+
+    }
+
+    function onSelect(event: XRInputSourceEvent) {
+      let frame = event.frame;
+
+      // if (session.enabledFeatures?.includes("anchors")) return;
+
+      const clickPose = event.frame.getPose(
+        event.inputSource.targetRaySpace,
+        renderer.xr.getReferenceSpace()!,
+      )!;
+
+      const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
+
+      const next = new Mesh(
+        new CylinderGeometry(),
+        new MeshBasicMaterial({ color: support ? "green" : "red" }),
+      );
+      next.position.copy(clickPose.transform.position);
+      next.position.y = 0.05;
+      next.scale.set(.05, .1, .05);
+      scene.add(next);
+      calibPoints.push(next);
+
+      if (calibPoints.length > 2) {
+        const prev = calibPoints.shift()!;
+        prev.removeFromParent();
+      }
+
+      if (calibPoints.length == 2) {
+        calibAnchor?.delete();
+        calibAnchor = undefined;
+        
+        const a = calibPoints[0].position;
+        const b = calibPoints[1].position;
+
+        const up = new Vector3(0, 1, 0);
+        const center = b.clone().lerp(a, .5);
+        const normal = up.clone().cross(b.clone().sub(a)).normalize();
+
+        const rotation = new Quaternion().setFromRotationMatrix(new Matrix4().lookAt(
+          center,
+          center.clone().add(normal),
+          up,
+        )).normalize();
+        const calibPose = new XRRigidTransform(center, rotation);
+
+        // Create a free-floating anchor.
+        frame.createAnchor!(calibPose, renderer.xr.getReferenceSpace()!)!.then((anchor) => {
+          calibAnchor = anchor;
+          const next = new Mesh(
+            new CylinderGeometry(),
+            new MeshBasicMaterial({ color: "magenta" }),
+          );
+          next.position.y = 0.05;
+          next.scale.set(.05, .1, .05);
+          calibratedSpace.add(next);
+        }, (error) => {
+          console.error("Could not create anchor: " + error);
+        });
+      }
+    }
   }
 
   // ===== 👨🏻‍💼 LOADING MANAGER =====
@@ -87,10 +177,13 @@ function init() {
 
   // ===== 📦 OBJECTS =====
   {
+    scene.add(calibratedSpace);
+    calibratedSpace.add(avatars);
     objects = new Object3D();
-    scene.add(objects);
+    calibratedSpace.add(objects);
     live = new NaiveRenderer();
     objects.add(live);
+    objects.add(interactions);
   }
 
 
@@ -193,7 +286,7 @@ function init() {
     stats = new Stats()
     document.body.appendChild(stats.dom)
 
-    document.body.appendChild(XRButton.createButton(renderer));
+    document.body.appendChild(XRButton.createButton(renderer, { requiredFeatures: ["anchors"] }));
   }
 
   // ==== 🐞 DEBUG GUI ====
@@ -216,6 +309,11 @@ function init() {
 
     const boxWire = new LineSegments(new WireframeGeometry(boxMesh.geometry));
     boxMesh.add(boxWire);
+
+    const t = new Vector3();
+    const r = new Quaternion();
+    const s = new Vector3();
+    const m = new Matrix4();
 
     framesChannel.port1.addEventListener("message", (event) => {
       const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
@@ -255,11 +353,56 @@ function init() {
 
         boxWire.geometry = new WireframeGeometry(boxMesh.geometry);
 
-        objects.position.set(0, 1, 0);
-        const test = new Vector3();
-        boxMesh.getWorldPosition(test);
-        objects.position.sub(scale.multiplyScalar(objects.scale.x));
-        objects.position.sub(test).y += 1;
+        // objects.position.set(0, 1, 0);
+        // const test = new Vector3();
+        // boxMesh.getWorldPosition(test);
+        // objects.position.sub(scale.multiplyScalar(objects.scale.x));
+        // objects.position.sub(test).y += 1;
+      }
+
+      if (frame.state) {
+        avatars.count = 0;
+        avatars.instanceMatrix.needsUpdate = true;
+        interactions.count = 0;
+        interactions.instanceMatrix.needsUpdate = true;
+
+        if (frame.state.scene) {
+          t.fromArray(frame.state.scene, 0);
+          r.fromArray(frame.state.scene, 3);
+          s.fromArray(frame.state.scene, 7);
+          s.x *= -1;
+
+          objects.position.copy(t);
+          objects.rotation.setFromQuaternion(r);
+          objects.scale.copy(s);
+
+          cameraControls.target.copy(objects.position);
+          cameraControls.target.addScaledVector(objects.scale, -.5);
+          cameraControls.update();
+        }
+
+        for (const [key, value] of Object.entries(frame.state)) {
+          if (key.startsWith("interaction.") && frame.positions) {
+            t.fromArray(frame.positions, (value as any).particles[0] * 3);
+            r.identity();
+            s.set(.1, .1, .1);
+            m.compose(t, r, s);
+            interactions.setMatrixAt(interactions.count, m);
+            interactions.count += 1;
+          }
+
+          if (key.startsWith("avatar.")) {
+            for (const component of (value as any).components) {
+              // const id = `${key}.${component.name}`;
+              t.fromArray(component.position);
+              r.fromArray(component.rotation);
+              s.set(.05, .05, .05);
+              m.compose(t, r, s);
+              avatars.setMatrixAt(avatars.count, m);
+              avatars.count += 1;
+            }
+          }
+        }
       }
     });
     framesChannel.port1.start();
@@ -357,7 +500,7 @@ function frame_positions_index(index: number) {
   sum.divideScalar(count);
   sum.multiply(objects.scale);
 
-  objects.position.set(0, 1, 0).sub(sum);
+  // objects.position.set(0, 1, 0).sub(sum);
   cameraControls.update();
 }
 
@@ -394,4 +537,13 @@ function animate() {
 
   renderer.render(scene, camera)
   stats.end()
+
+  if (renderer.xr.isPresenting && calibAnchor) {
+    const frame = renderer.xr.getFrame();
+    const pose = frame.getPose(calibAnchor.anchorSpace, renderer.xr.getReferenceSpace()!)!;
+    
+    calibratedSpace.position.copy(pose.transform.position);
+    calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
+    calibratedSpace.scale.x = -1;
+  }
 }
