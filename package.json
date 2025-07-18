@@ -16,6 +16,7 @@
   "dependencies": {
     "lil-gui": "^0.20.0",
     "stats.js": "^0.17.0",
-    "three": "^0.178.0"
+    "three": "^0.178.0",
+    "troika-three-text": "^0.52.4"
   }
 }

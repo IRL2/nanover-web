@@ -15,6 +15,7 @@ import {
   Matrix4,
   Mesh,
   MeshBasicMaterial,
+  MeshLambertMaterial,
   Object3D,
   PerspectiveCamera,
   Quaternion,
@@ -34,13 +35,15 @@ import { TestTrajectory } from './nanover/types'
 import { SendMessageData } from './nanover/workers/traj-loader-worker'
 import { XRButton } from 'three/examples/jsm/webxr/XRButton.js'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js'
+import { OBJLoader } from 'three/examples/jsm/Addons.js'
+
+import { Text } from "troika-three-text";
 
 const CANVAS_ID = 'scene'
 
 let canvas: HTMLElement
 let renderer: WebGLRenderer
 let scene: Scene
-let loadingManager: LoadingManager
 let camera: PerspectiveCamera
 let cameraControls: OrbitControls
 let stats: Stats
@@ -57,7 +60,7 @@ let calibAnchor: XRAnchor | undefined;
 
 let calibratedSpace = new Object3D();
 
-const avatars = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "red" }), 64);
+const avatars = new InstancedMesh(new BoxGeometry(), new MeshLambertMaterial(), 64);
 avatars.boundingSphere = new Sphere(new Vector3(), 100);
 avatars.count = 0;
 const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
@@ -156,24 +159,11 @@ function init() {
     }
   }
 
-  // ===== 👨🏻‍💼 LOADING MANAGER =====
-  {
-    loadingManager = new LoadingManager()
-
-    loadingManager.onStart = () => {
-      console.log('loading started')
-    }
-    loadingManager.onProgress = (url, loaded, total) => {
-      console.log('loading in progress:')
-      console.log(`${url} -> ${loaded} / ${total}`)
-    }
-    loadingManager.onLoad = () => {
-      console.log('loaded!')
-    }
-    loadingManager.onError = () => {
-      console.log('❌ error while loading')
-    }
-  }
+  const loader = new OBJLoader();
+  loader.load(new URL("./data/circlet.obj", window.location.href).toString(), (data) => {
+    avatars.geometry = data.children[0].geometry;
+    avatars.geometry.rotateX(-Math.PI * .5);
+  });
 
   // ===== 📦 OBJECTS =====
   {
@@ -185,7 +175,6 @@ function init() {
     objects.add(live);
     objects.add(interactions);
   }
-
 
   const elementColors = new Map([
     [1, new Color("white")],
@@ -314,6 +303,9 @@ function init() {
     const r = new Quaternion();
     const s = new Vector3();
     const m = new Matrix4();
+    const c2 = new Color();
+
+    const texts: Set<Text> = new Set();
 
     framesChannel.port1.addEventListener("message", (event) => {
       const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
@@ -363,8 +355,15 @@ function init() {
       if (frame.state) {
         avatars.count = 0;
         avatars.instanceMatrix.needsUpdate = true;
+        if (avatars.instanceColor) avatars.instanceColor.needsUpdate = true;
         interactions.count = 0;
         interactions.instanceMatrix.needsUpdate = true;
+
+        for (const text of texts) {
+          text.dispose();
+          text.removeFromParent();
+        }
+        texts.clear();
 
         if (frame.state.scene) {
           t.fromArray(frame.state.scene, 0);
@@ -392,6 +391,7 @@ function init() {
           }
 
           if (key.startsWith("avatar.")) {
+            c2.fromArray((value as any).color);
             for (const component of (value as any).components) {
               // const id = `${key}.${component.name}`;
               t.fromArray(component.position);
@@ -399,7 +399,24 @@ function init() {
               s.set(.05, .05, .05);
               m.compose(t, r, s);
               avatars.setMatrixAt(avatars.count, m);
+              avatars.setColorAt(avatars.count, c2);
               avatars.count += 1;
+
+              const myText = new Text();
+              scene.add(myText);
+
+              // Set properties to configure:
+              myText.text = (value as any).name;
+              myText.fontSize = 0.05;
+              myText.position.copy(t).y += 0.1;
+              myText.color = c2.getHexString();
+              myText.anchorX = "center";
+              myText.anchorY = "bottom";
+              myText.lookAt(camera.position);
+
+              // Update the rendering:
+              myText.sync()
+              texts.add(myText);
             }
           }
         }
@@ -500,7 +517,7 @@ function frame_positions_index(index: number) {
   sum.divideScalar(count);
   sum.multiply(objects.scale);
 
-  // objects.position.set(0, 1, 0).sub(sum);
+  cameraControls.target = sum;
   cameraControls.update();
 }
 
