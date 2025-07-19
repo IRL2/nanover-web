@@ -1,5 +1,6 @@
 from array import array
 from base64 import b64encode
+import struct
 from typing import Iterable
 from json import dumps
 from MDAnalysis import AtomGroup
@@ -10,6 +11,10 @@ def base64(format: str, values: Iterable):
     return b64encode(array(format, values)).decode("UTF-8")
 
 
+def pack_array(typecode: str, count: int, values: Iterable):
+    return struct.pack(f"{count}{typecode}", *values)
+
+
 def make_topology(elements: Iterable[int], bonds: Iterable[int]):
     return {
         "elements": base64("B", elements),
@@ -17,8 +22,8 @@ def make_topology(elements: Iterable[int], bonds: Iterable[int]):
     }
 
 
-def make_positions(postions: Iterable[float]):
-    return base64("f", postions)
+def make_positions(positions: Iterable[float]):
+    return base64("f", positions)
 
 
 def frame_to_web(frame):

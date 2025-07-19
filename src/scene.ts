@@ -7,10 +7,10 @@ import {
   Color,
   CylinderGeometry,
   DirectionalLight,
+  DoubleSide,
   IcosahedronGeometry,
   InstancedMesh,
   LineSegments,
-  LoadingManager,
   Matrix3,
   Matrix4,
   Mesh,
@@ -19,6 +19,7 @@ import {
   Object3D,
   PerspectiveCamera,
   Quaternion,
+  RingGeometry,
   Scene,
   Sphere,
   Vector3,
@@ -38,6 +39,7 @@ import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerM
 import { OBJLoader } from 'three/examples/jsm/Addons.js'
 
 import { Text } from "troika-three-text";
+import Button from './scrap/button'
 
 const CANVAS_ID = 'scene'
 
@@ -53,6 +55,8 @@ let live: NaiveRenderer;
 let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
+let panel: Object3D;
+let sliderHandle: Object3D;
 
 
 const calibPoints: Mesh[] = [];
@@ -161,7 +165,7 @@ function init() {
 
   const loader = new OBJLoader();
   loader.load(new URL("./data/circlet.obj", window.location.href).toString(), (data) => {
-    avatars.geometry = data.children[0].geometry;
+    avatars.geometry = (data.children[0] as any).geometry;
     avatars.geometry.rotateX(-Math.PI * .5);
   });
 
@@ -175,6 +179,32 @@ function init() {
     objects.add(live);
     objects.add(interactions);
   }
+
+  panel = new Object3D();
+  scene.add(panel);
+
+  const playButton = new Button("PLAY");
+  playButton.scale.multiplyScalar(.05);
+  playButton.position.x = -.25;
+  panel.add(playButton);
+
+  const resetButton = new Button("RESET");
+  resetButton.scale.multiplyScalar(.05);
+  resetButton.position.x = .25;
+  panel.add(resetButton);
+
+  sliderHandle = new Button("");
+  sliderHandle.scale.multiplyScalar(.04);
+  panel.add(sliderHandle);
+
+  const sliderRing = new Mesh(
+    new RingGeometry(.2, .3, 32, 1, -Math.PI, Math.PI),
+    new MeshBasicMaterial({ color: 0x333333, side: DoubleSide }),
+  );
+  sliderRing.rotateX(Math.PI * .5);
+  panel.add(sliderRing);
+
+  setInterval(() => playButton.setHovered(performance.now() % 5 < 3), 100);
 
   const elementColors = new Map([
     [1, new Color("white")],
@@ -409,7 +439,7 @@ function init() {
               myText.text = (value as any).name;
               myText.fontSize = 0.05;
               myText.position.copy(t).y += 0.1;
-              myText.color = c2.getHexString();
+              myText.color = "#" + c2.getHexString();
               myText.anchorX = "center";
               myText.anchorY = "bottom";
               myText.lookAt(camera.position);
@@ -527,7 +557,16 @@ function animate() {
   const max = Math.max(1, ...pairs.map(({ traj }) => traj.positions.length));
 
   frameSeek.max(max);
-  
+
+  const u = frameSeek.getValue() / max;
+  const inner = Math.PI / 16;
+  const angle = -Math.PI+inner + (Math.PI-inner*2) * u;
+  sliderHandle.position.set(
+    Math.cos(angle) * .25,
+    0,
+    Math.sin(angle) * .25,
+  );
+
   if (framePlay.getValue()) {
     frameTimer += dt;
     if (frameTimer > 1/30) {
@@ -551,9 +590,21 @@ function animate() {
   }
 
   cameraControls.update()
-
+  
   renderer.render(scene, camera)
   stats.end()
+
+  if (renderer.xr.isPresenting) {
+    const camera = renderer.xr.getCamera();
+    panel.position.copy(camera.position).y -= .5;
+    // panel.lookAt(objects.position.x, panel.position.y, objects.position.z);
+
+    const forward = new Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.multiplyScalar(-1);
+    panel.lookAt(forward.add(panel.position));
+  }
 
   if (renderer.xr.isPresenting && calibAnchor) {
     const frame = renderer.xr.getFrame();

@@ -64,7 +64,7 @@ openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out local
 
 Install dependencies:
 ```bash
-pip install websockets aiohttp
+pip install websockets aiohttp msgpack
 ```
 
 Run a NanoVer python server as usual (e.g with nanover-omni or a jupyter notebook).
