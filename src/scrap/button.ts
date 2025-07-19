@@ -8,6 +8,7 @@ export default class Button extends Object3D {
     disabled = false;
     hovered = false;
     active = false;
+    onclick = () => {};
 
     constructor(label: string) {
         super();
@@ -32,6 +33,14 @@ export default class Button extends Object3D {
     setLabel(label: string) {
         this.label.text = label;
         this.label.sync();
+    }
+
+    enter() {
+        this.setHovered(true);
+    }
+
+    exit() {
+        this.setHovered(false);
     }
 
     setHovered(value: boolean) {
