@@ -62,6 +62,8 @@ openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out local
 
 ### NanoVer server tests
 
+This won't work in Firefox because it disallows connecting to self-signed websockets.
+
 Install dependencies:
 ```bash
 pip install websockets aiohttp msgpack

@@ -1,11 +1,3 @@
-export type TestTrajectoryDataSmall = {
-  topology: {
-    elements: string;
-    bonds: string;
-  };
-  positions: string[];
-}
-
 export type TestTrajectoryDataBytes = {
   topology: {
     elements: Uint8Array;

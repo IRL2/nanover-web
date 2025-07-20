@@ -1,5 +1,5 @@
 import { unpack } from "msgpackr";
-import { decode, decode2 } from "../convert.ts";
+import { decode } from "../convert.ts";
 import { TestTrajectory, TestTrajectoryDataBytes } from "../types";
 
 export type SetupMessageData = {
@@ -22,7 +22,7 @@ onmessage = (event) => {
     const response = await fetch(path);
     const blob = await response.blob();
     const data = unpack(await blob.arrayBuffer()) as TestTrajectoryDataBytes;
-    const traj = decode2(data);
+    const traj = decode(data);
 
     port.postMessage({ traj } as SendMessageData, { transfer: [
       traj.topology.bonds.buffer,
