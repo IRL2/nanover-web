@@ -3,11 +3,12 @@ import {
   AmbientLight,
   BackSide,
   BoxGeometry,
+  CapsuleGeometry,
   Clock,
   Color,
   CylinderGeometry,
   DirectionalLight,
-  DoubleSide,
+  Group,
   IcosahedronGeometry,
   InstancedMesh,
   LineSegments,
@@ -19,13 +20,12 @@ import {
   Object3D,
   PerspectiveCamera,
   Quaternion,
-  RingGeometry,
   Scene,
   Sphere,
   Vector3,
   WebGLRenderer,
+  WebXRSpaceEventMap,
   WireframeGeometry,
-  XRTargetRaySpace,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import Stats from 'stats.js'
@@ -38,6 +38,7 @@ import { SendMessageData } from './nanover/workers/traj-loader-worker'
 import { XRButton } from 'three/examples/jsm/webxr/XRButton.js'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js'
 import { OBJLoader } from 'three/examples/jsm/Addons.js'
+import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 
 import { Text } from "troika-three-text";
 import Button from './scrap/button'
@@ -59,12 +60,11 @@ let frameTimer = 0.0;
 let panel: Object3D;
 let panelRot: Object3D;
 let sliderHandle: Button;
-
-const bodyArc = Math.PI / 8;
+let range: number;
 
 let buttons: Button[] = [];
 
-function ui_hover(group: XRTargetRaySpace) {
+function ui_hover(group: Group<WebXRSpaceEventMap>) {
   const p = new Vector3();
   const c = new Vector3();
   group.userData ??= {};
@@ -77,6 +77,7 @@ function ui_hover(group: XRTargetRaySpace) {
     button.face.getWorldPosition(p);
     const d = p.distanceTo(c);
     const close = d < .075;
+
     if (close) group.userData.hovered = button;
   }
 
@@ -211,30 +212,40 @@ function init() {
   panelRot.add(panel);
   scene.add(panelRot);
 
-  const playButton = new Button("PLAY");
-  playButton.scale.multiplyScalar(.05);
-  playButton.position.x = -.25;
-  panel.add(playButton);
+  function make_button(label: string, onclick = () => {}) {
+    const button = new Button(label);
+    button.onclick = onclick;
+    button.scale.multiplyScalar(.05);
+    return button;
+  }
 
-  playButton.onclick = () => framePlay.setValue(!framePlay.getValue());
+  const playButton = make_button("PLAY", () => framePlay.setValue(!framePlay.getValue()));
+  const resetButton = make_button("RESET", () => frameSeek.setValue(0));
+  const prevButton = make_button("<", () => frameSeek.setValue(frameSeek.getValue()-1));
+  const nextButton = make_button(">", () => frameSeek.setValue(frameSeek.getValue()+1));
 
-  const resetButton = new Button("RESET");
-  resetButton.scale.multiplyScalar(.05);
-  resetButton.position.x = .25;
-  panel.add(resetButton);
+  buttons.push(playButton, prevButton, nextButton, resetButton);
+  const gap = 0.125;
+  range = (buttons.length-1) * gap;
+  
+  let offset = -range * .5;
 
-  resetButton.onclick = () => frameSeek.setValue(0);
+  for (const button of buttons) {
+    panel.add(button);
+    button.position.x = offset;
+    offset += gap;
+  }
 
   sliderHandle = new Button("");
   sliderHandle.scale.multiplyScalar(.04);
-  panel.add(sliderHandle);
 
-  const sliderRing = new Mesh(
-    new RingGeometry(.2, .3, 32, 1, -Math.PI+bodyArc, Math.PI-bodyArc*2),
-    new MeshBasicMaterial({ color: 0x333333, side: DoubleSide }),
+  const sliderTrack = new Mesh(
+    new CapsuleGeometry(.02, range + gap).rotateZ(Math.PI * .5),
+    new MeshBasicMaterial({ color: 0x333333 }),
   );
-  sliderRing.rotateX(Math.PI * .5);
-  panel.add(sliderRing);
+  sliderTrack.position.set(0, 0, -.1);
+  panel.add(sliderTrack);
+  sliderTrack.add(sliderHandle);
 
   buttons.push(playButton, resetButton, sliderHandle);
 
@@ -322,22 +333,36 @@ function init() {
     scene.add(skybox);
     skybox.visible = false;
 
+    function add_clicker(grip: Group<WebXRSpaceEventMap>, name = "UNKNOWN") {
+      grip.userData = { name };
+      grip.addEventListener("select", () => {
+        console.log("SELECT", grip.userData.name, grip.userData.hovered);
+        grip.userData.hovered?.onclick();
+      });
+    }
+
     const controllerModelFactory = new XRControllerModelFactory();
     const controllerGrip1 = renderer.xr.getControllerGrip(0);
     controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
     scene.add(controllerGrip1);
 
-    controllerGrip1.addEventListener("select", () => {
-      renderer.xr.getController(0).userData.hovered?.onclick();
-    });
-
     const controllerGrip2 = renderer.xr.getControllerGrip(1);
     controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
     scene.add(controllerGrip2);
+    
+    const hand1 = renderer.xr.getHand(0);
+    hand1.add(new OculusHandModel(hand1));
+    scene.add(hand1);
+    
+    const hand2 = renderer.xr.getHand(1);
+    hand2.add(new OculusHandModel(hand2));
+    scene.add(hand2);
 
-    controllerGrip2.addEventListener("select", () => {
-      renderer.xr.getController(1).userData.hovered?.onclick();
-    });
+    add_clicker(renderer.xr.getController(0), "left controller");
+    add_clicker(renderer.xr.getController(1), "right controller");
+
+    add_clicker(hand1, "left hand");
+    add_clicker(hand2, "right hand");
   }
 
   // ===== 📈 STATS & CLOCK =====
@@ -345,7 +370,7 @@ function init() {
     stats = new Stats()
     document.body.appendChild(stats.dom)
 
-    document.body.appendChild(XRButton.createButton(renderer, { requiredFeatures: ["anchors"] }));
+    document.body.appendChild(XRButton.createButton(renderer, { optionalFeatures: ["anchors", "hand-tracking"] }));
   }
 
   // ==== 🐞 DEBUG GUI ====
@@ -599,13 +624,7 @@ function animate() {
   frameSeek.max(max);
 
   const u = frameSeek.getValue() / max;
-  const inner = Math.PI / 16 + bodyArc;
-  const angle = -Math.PI+inner + (Math.PI-inner*2) * u;
-  sliderHandle.position.set(
-    Math.cos(angle) * .25,
-    0,
-    Math.sin(angle) * .25,
-  );
+  sliderHandle.position.set(range * (u - .5), 0, 0);
 
   if (framePlay.getValue()) {
     frameTimer += dt;
@@ -646,10 +665,12 @@ function animate() {
     forward.multiplyScalar(-1);
     panelRot.lookAt(forward.clone().add(panelRot.position));
     panel.rotation.x = Math.PI * .25;
-    panelRot.position.addScaledVector(forward, -.35);
+    panelRot.position.addScaledVector(forward, -.5);
 
     ui_hover(renderer.xr.getController(0));
     ui_hover(renderer.xr.getController(1));
+    ui_hover(renderer.xr.getHand(0));
+    ui_hover(renderer.xr.getHand(1));
   }
 
   if (renderer.xr.isPresenting && calibAnchor) {
