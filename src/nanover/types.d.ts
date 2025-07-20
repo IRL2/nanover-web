@@ -1,9 +1,9 @@
-export type TestTrajectoryDataSmall = {
+export type TestTrajectoryDataBytes = {
   topology: {
-    elements: string;
-    bonds: string;
+    elements: Uint8Array;
+    bonds: Uint8Array;
   };
-  positions: string[];
+  positions: Uint8Array[];
 }
 
 export type TestTrajectory = {
@@ -16,11 +16,11 @@ export type TestTrajectory = {
 
 export type TestFrameData = {
   topology?: {
-    elements: string;
-    bonds: string;
+    elements: Uint8Array;
+    bonds: Uint8Array;
   }
-  positions: string;
-  box: string;
+  positions: Uint8Array;
+  box: Uint8Array;
   state: any;
 }
 

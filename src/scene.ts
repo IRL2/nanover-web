@@ -3,18 +3,20 @@ import {
   AmbientLight,
   BackSide,
   BoxGeometry,
+  CapsuleGeometry,
   Clock,
   Color,
   CylinderGeometry,
   DirectionalLight,
+  Group,
   IcosahedronGeometry,
   InstancedMesh,
   LineSegments,
-  LoadingManager,
   Matrix3,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
+  MeshLambertMaterial,
   Object3D,
   PerspectiveCamera,
   Quaternion,
@@ -22,6 +24,7 @@ import {
   Sphere,
   Vector3,
   WebGLRenderer,
+  WebXRSpaceEventMap,
   WireframeGeometry,
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
@@ -34,13 +37,17 @@ import { TestTrajectory } from './nanover/types'
 import { SendMessageData } from './nanover/workers/traj-loader-worker'
 import { XRButton } from 'three/examples/jsm/webxr/XRButton.js'
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js'
+import { OBJLoader } from 'three/examples/jsm/Addons.js'
+import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
+
+import { Text } from "troika-three-text";
+import Button from './scrap/button'
 
 const CANVAS_ID = 'scene'
 
 let canvas: HTMLElement
 let renderer: WebGLRenderer
 let scene: Scene
-let loadingManager: LoadingManager
 let camera: PerspectiveCamera
 let cameraControls: OrbitControls
 let stats: Stats
@@ -50,14 +57,40 @@ let live: NaiveRenderer;
 let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
+let panel: Object3D;
+let panelRot: Object3D;
+let sliderHandle: Button;
+let range: number;
+let recenter = () => {};
 
+let buttons: Button[] = [];
+
+function ui_hover(group: Group<WebXRSpaceEventMap>) {
+  const p = new Vector3();
+  const c = new Vector3();
+  group.userData ??= {};
+  group.userData.hovered?.exit();
+  group.userData.hovered = undefined;
+
+  group.getWorldPosition(c);
+
+  for (const button of buttons) {
+    button.face.getWorldPosition(p);
+    const d = p.distanceTo(c);
+    const close = d < .075;
+
+    if (close) group.userData.hovered = button;
+  }
+
+  group.userData.hovered?.enter();
+}
 
 const calibPoints: Mesh[] = [];
 let calibAnchor: XRAnchor | undefined;
 
 let calibratedSpace = new Object3D();
 
-const avatars = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "red" }), 64);
+const avatars = new InstancedMesh(new BoxGeometry(), new MeshLambertMaterial(), 64);
 avatars.boundingSphere = new Sphere(new Vector3(), 100);
 avatars.count = 0;
 const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
@@ -97,6 +130,8 @@ function init() {
     function onSelect(event: XRInputSourceEvent) {
       let frame = event.frame;
 
+      // skip calib
+      return;
       // if (session.enabledFeatures?.includes("anchors")) return;
 
       const clickPose = event.frame.getPose(
@@ -156,24 +191,11 @@ function init() {
     }
   }
 
-  // ===== 👨🏻‍💼 LOADING MANAGER =====
-  {
-    loadingManager = new LoadingManager()
-
-    loadingManager.onStart = () => {
-      console.log('loading started')
-    }
-    loadingManager.onProgress = (url, loaded, total) => {
-      console.log('loading in progress:')
-      console.log(`${url} -> ${loaded} / ${total}`)
-    }
-    loadingManager.onLoad = () => {
-      console.log('loaded!')
-    }
-    loadingManager.onError = () => {
-      console.log('❌ error while loading')
-    }
-  }
+  const loader = new OBJLoader();
+  loader.load(new URL("./data/circlet.obj", window.location.href).toString(), (data) => {
+    avatars.geometry = (data.children[0] as any).geometry;
+    avatars.geometry.rotateX(-Math.PI * .5);
+  });
 
   // ===== 📦 OBJECTS =====
   {
@@ -186,6 +208,48 @@ function init() {
     objects.add(interactions);
   }
 
+  panelRot = new Object3D();
+  panel = new Object3D();
+  panelRot.add(panel);
+  scene.add(panelRot);
+
+  function make_button(label: string, onclick = () => {}) {
+    const button = new Button(label);
+    button.onclick = onclick;
+    button.scale.multiplyScalar(.05);
+    return button;
+  }
+
+  const playButton = make_button("PLAY", () => framePlay.setValue(!framePlay.getValue()));
+  const resetButton = make_button("RESET", () => frameSeek.setValue(0));
+  const centerButton = make_button("CENTER", () => recenter());
+  const prevButton = make_button("<", () => frameSeek.setValue(frameSeek.getValue()-1));
+  const nextButton = make_button(">", () => frameSeek.setValue(frameSeek.getValue()+1));
+
+  buttons.push(playButton, prevButton, centerButton, nextButton, resetButton);
+  const gap = 0.125;
+  range = (buttons.length-1) * gap;
+  
+  let offset = -range * .5;
+
+  for (const button of buttons) {
+    panel.add(button);
+    button.position.x = offset;
+    offset += gap;
+  }
+
+  sliderHandle = new Button("");
+  sliderHandle.scale.multiplyScalar(.04);
+
+  const sliderTrack = new Mesh(
+    new CapsuleGeometry(.02, range + gap).rotateZ(Math.PI * .5),
+    new MeshBasicMaterial({ color: 0x333333 }),
+  );
+  sliderTrack.position.set(0, 0, -.1);
+  panel.add(sliderTrack);
+  sliderTrack.add(sliderHandle);
+
+  buttons.push(playButton, resetButton, sliderHandle);
 
   const elementColors = new Map([
     [1, new Color("white")],
@@ -271,6 +335,14 @@ function init() {
     scene.add(skybox);
     skybox.visible = false;
 
+    function add_clicker(grip: Group<WebXRSpaceEventMap>, name = "UNKNOWN") {
+      grip.userData = { name };
+      grip.addEventListener("select", () => {
+        console.log("SELECT", grip.userData.name, grip.userData.hovered);
+        grip.userData.hovered?.onclick();
+      });
+    }
+
     const controllerModelFactory = new XRControllerModelFactory();
     const controllerGrip1 = renderer.xr.getControllerGrip(0);
     controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
@@ -279,6 +351,20 @@ function init() {
     const controllerGrip2 = renderer.xr.getControllerGrip(1);
     controllerGrip2.add(controllerModelFactory.createControllerModel(controllerGrip2));
     scene.add(controllerGrip2);
+    
+    const hand1 = renderer.xr.getHand(0);
+    hand1.add(new OculusHandModel(hand1));
+    scene.add(hand1);
+    
+    const hand2 = renderer.xr.getHand(1);
+    hand2.add(new OculusHandModel(hand2));
+    scene.add(hand2);
+
+    add_clicker(renderer.xr.getController(0), "left controller");
+    add_clicker(renderer.xr.getController(1), "right controller");
+
+    add_clicker(hand1, "left hand");
+    add_clicker(hand2, "right hand");
   }
 
   // ===== 📈 STATS & CLOCK =====
@@ -286,7 +372,7 @@ function init() {
     stats = new Stats()
     document.body.appendChild(stats.dom)
 
-    document.body.appendChild(XRButton.createButton(renderer, { requiredFeatures: ["anchors"] }));
+    document.body.appendChild(XRButton.createButton(renderer, { optionalFeatures: ["anchors", "hand-tracking"] }));
   }
 
   // ==== 🐞 DEBUG GUI ====
@@ -314,6 +400,9 @@ function init() {
     const r = new Quaternion();
     const s = new Vector3();
     const m = new Matrix4();
+    const c2 = new Color();
+
+    const texts: Set<Text> = new Set();
 
     framesChannel.port1.addEventListener("message", (event) => {
       const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
@@ -363,8 +452,15 @@ function init() {
       if (frame.state) {
         avatars.count = 0;
         avatars.instanceMatrix.needsUpdate = true;
+        if (avatars.instanceColor) avatars.instanceColor.needsUpdate = true;
         interactions.count = 0;
         interactions.instanceMatrix.needsUpdate = true;
+
+        for (const text of texts) {
+          text.dispose();
+          text.removeFromParent();
+        }
+        texts.clear();
 
         if (frame.state.scene) {
           t.fromArray(frame.state.scene, 0);
@@ -392,6 +488,7 @@ function init() {
           }
 
           if (key.startsWith("avatar.")) {
+            c2.fromArray((value as any).color);
             for (const component of (value as any).components) {
               // const id = `${key}.${component.name}`;
               t.fromArray(component.position);
@@ -399,7 +496,24 @@ function init() {
               s.set(.05, .05, .05);
               m.compose(t, r, s);
               avatars.setMatrixAt(avatars.count, m);
+              avatars.setColorAt(avatars.count, c2);
               avatars.count += 1;
+
+              const myText = new Text();
+              scene.add(myText);
+
+              // Set properties to configure:
+              myText.text = (value as any).name;
+              myText.fontSize = 0.05;
+              myText.position.copy(t).y += 0.1;
+              myText.color = "#" + c2.getHexString();
+              myText.anchorX = "center";
+              myText.anchorY = "bottom";
+              myText.lookAt(camera.position);
+
+              // Update the rendering:
+              myText.sync()
+              texts.add(myText);
             }
           }
         }
@@ -426,9 +540,9 @@ function init() {
     }
 
     const trajpaths = [
-      { name: "Ludo GluHUTs", paths: ["ludo-gluhut-0.json", "ludo-gluhut-1.json", "ludo-gluhut-2.json", "ludo-gluhut-3.json", "ludo-gluhut-4.json", "ludo-gluhut-5.json", "ludo-gluhut-6.json"] },
-      { name: "17-Alanine", paths: ["bucky-test.json"] },
-      { name: "Nanotube", paths: ["webtraj.json"] },
+      { name: "Ludo GluHUTs", paths: ["ludo-gluhut-0.msgpack", "ludo-gluhut-1.msgpack", "ludo-gluhut-2.msgpack", "ludo-gluhut-3.msgpack", "ludo-gluhut-4.msgpack", "ludo-gluhut-5.msgpack", "ludo-gluhut-6.msgpack"] },
+      { name: "17-Alanine", paths: ["bucky-test.msgpack"] },
+      { name: "Nanotube", paths: ["webtraj.msgpack"] },
     ];
 
     function loadTrajectories(paths: string[]) {
@@ -441,6 +555,12 @@ function init() {
         path = new URL("./data/" + path, window.location.href).toString();
         trajLoaderChannel.port1.postMessage({ path });
       }
+    }
+
+    recenter = function() {
+      const p = renderer.xr.getCamera().getWorldPosition(new Vector3());
+      const d = renderer.xr.getCamera().getWorldDirection(new Vector3());
+      objects.position.copy(p).addScaledVector(d, 1).sub(cameraControls.target);
     }
 
     const discoveryFolder = gui.addFolder("Discovery");
@@ -457,7 +577,7 @@ function init() {
 
     frameSeek.$widget.onpointerdown = () => framePlay.setValue(false);
 
-    loadTrajectories(trajpaths[1].paths);
+    loadTrajectories(trajpaths[2].paths);
 
     // persist GUI state in local storage on changes
     gui.onFinishChange(() => {
@@ -500,7 +620,7 @@ function frame_positions_index(index: number) {
   sum.divideScalar(count);
   sum.multiply(objects.scale);
 
-  // objects.position.set(0, 1, 0).sub(sum);
+  cameraControls.target = sum;
   cameraControls.update();
 }
 
@@ -510,7 +630,10 @@ function animate() {
   const max = Math.max(1, ...pairs.map(({ traj }) => traj.positions.length));
 
   frameSeek.max(max);
-  
+
+  const u = frameSeek.getValue() / max;
+  sliderHandle.position.set(range * (u - .5), 0, 0);
+
   if (framePlay.getValue()) {
     frameTimer += dt;
     if (frameTimer > 1/30) {
@@ -527,16 +650,36 @@ function animate() {
 
   stats.begin()
 
-  if (resizeRendererToDisplaySize(renderer)) {
+  if (!renderer.xr.isPresenting && resizeRendererToDisplaySize(renderer)) {
     const canvas = renderer.domElement
     camera.aspect = canvas.clientWidth / canvas.clientHeight
     camera.updateProjectionMatrix()
   }
 
   cameraControls.update()
-
+  
   renderer.render(scene, camera)
   stats.end()
+
+  panel.visible = renderer.xr.isPresenting;
+
+  if (renderer.xr.isPresenting) {
+    const camera = renderer.xr.getCamera();
+    panelRot.position.copy(camera.position).y -= .35;
+
+    const forward = new Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.multiplyScalar(-1);
+    panelRot.lookAt(forward.clone().add(panelRot.position));
+    panel.rotation.x = Math.PI * .25;
+    panelRot.position.addScaledVector(forward, -.35);
+
+    ui_hover(renderer.xr.getController(0));
+    ui_hover(renderer.xr.getController(1));
+    ui_hover(renderer.xr.getHand(0));
+    ui_hover(renderer.xr.getHand(1));
+  }
 
   if (renderer.xr.isPresenting && calibAnchor) {
     const frame = renderer.xr.getFrame();

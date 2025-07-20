@@ -4,6 +4,7 @@ import websockets
 import ssl
 import json
 import aiohttp
+import msgpack
 
 from nanover.app import NanoverImdClient
 from nanover.trajectory.frame_data import PARTICLE_POSITIONS
@@ -11,11 +12,12 @@ from nanover.state.state_dictionary import DictionaryChange
 from MDAnalysis import AtomGroup
 from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
 
-from converter import base64, make_topology, make_positions
+from converter import pack_array
 
 async def forward_user(client, websocket):
     while True:
         data: dict = json.loads(await websocket.recv())
+        
         change = DictionaryChange(
             updates=data.get("updates", {}),
             removals=data.get("removals", set()),
@@ -31,35 +33,43 @@ async def forward_frames(client, websocket):
     add_frame_topology_to_mda(universe, frame)
     selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
 
-    topology = make_topology(
-        frame.particle_elements[:len(selection)],
-        selection.bonds.to_indices().flat,
-    )
+    elements = frame.particle_elements[:len(selection)]
+    bonds = selection.bonds.to_indices().flat
+
+    topology = {
+        "elements": pack_array("B", len(elements), elements),
+        "bonds": pack_array("L", len(bonds), bonds),
+    }
 
     data = {
         "topology": topology,
     }
 
-
     fields = frame.raw.arrays["system.box.vectors"].ListFields()
-    array = fields[0][1].values
-    data["box"] = base64("f", array)
+    array2 = fields[0][1].values
+    data["box"] = pack_array("f", len(array2), array2)
 
-    await websocket.send(json.dumps(data))
+    await websocket.send(msgpack.packb(data))
 
     while True:
         frame = client.current_frame
         if PARTICLE_POSITIONS in frame:
-            # print("FRAME")
+            #print("FRAME")
             universe = frame_data_to_mdanalysis(frame)
             selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
             data = { 
-                "positions": make_positions(c * .1 for c in selection.positions.flat),
+                "positions": pack_array("f", len(selection.positions) * 3, (c * .1 for c in selection.positions.flat)),
                 "state": client.latest_multiplayer_values,
             }
-            text = json.dumps(data)
-            text = text.replace("Infinity", "null")
-            await websocket.send(text)
+            
+            # print(
+            #     len(data["positions"]),
+            #     len(selection.positions.tobytes()),
+            # )
+
+            bin = msgpack.packb(data)
+
+            await websocket.send(bin)
         await asyncio.sleep(1/30)
 
 

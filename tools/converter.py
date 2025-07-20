@@ -1,40 +1,29 @@
-from array import array
-from base64 import b64encode
+import struct
+import msgpack
 from typing import Iterable
-from json import dumps
-from MDAnalysis import AtomGroup
-from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
+from nanover.mdanalysis.converter import ELEMENT_INDEX
 
+def write_webtraj(selection, io):
+    universe = selection.universe
+    
+    elements = (ELEMENT_INDEX[e] for e in selection.elements)
+    bonds = selection.bonds.to_indices().flat
 
-def base64(format: str, values: Iterable):
-    return b64encode(array(format, values)).decode("UTF-8")
-
-
-def make_topology(elements: Iterable[int], bonds: Iterable[int]):
-    return {
-        "elements": base64("B", elements),
-        "bonds": base64("L", bonds),
+    topology = {
+        "elements": pack_array("B", len(selection.elements), elements),
+        "bonds": pack_array("L", len(bonds), bonds),
     }
-
-
-def make_positions(postions: Iterable[float]):
-    return base64("f", postions)
-
-
-def frame_to_web(frame):
-    limit = 8000
-    universe = frame_data_to_mdanalysis(frame)
-    add_frame_topology_to_mda(universe, frame)
-    selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
-
-    topology = make_topology(
-        frame.particle_elements[:len(selection)],
-        selection.bonds.to_indices().flat,
-    )
-
+    
+    positions = []
+    for t in universe.trajectory:
+        positions.append(pack_array("f", len(selection.positions) * 3, (c * .1 for c in selection.positions.flat)))
+    
     data = {
         "topology": topology,
-        "positions": make_positions(c * .1 for c in selection.positions.flat),
+        "positions": positions,
     }
 
-    return dumps(data)
+    io.write(msgpack.packb(data))
+
+def pack_array(typecode: str, count: int, values: Iterable):
+    return struct.pack(f"{count}{typecode}", *values)

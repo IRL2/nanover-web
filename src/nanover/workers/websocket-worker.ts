@@ -1,4 +1,5 @@
-import { base64ToBytes } from "../convert.js";
+import { unpack } from "msgpackr";
+import { bytesToArray } from "../convert.js";
 import { TestFrame, TestFrameData } from "../types.js";
 
 export type SetupMessageData = {
@@ -38,28 +39,31 @@ onmessage = (event) => {
     console.log("ERROR", event);
   });
 
-  socket.addEventListener("message", (event) => {
-    console.log("SOCKET MSG");
-    const data = JSON.parse(event.data) as TestFrameData;
+  socket.addEventListener("message", async (event) => {
+    // console.log("SOCKET MSG");
+
+    const data = event.data instanceof Blob 
+      ? unpack(await event.data.arrayBuffer()) as TestFrameData
+      : JSON.parse(event.data) as TestFrameData;
     const frame = {} as TestFrame;
     const transfer = [];
 
     if (data.topology) {
-      const elements = new Uint8Array(base64ToBytes(data.topology.elements).buffer);
-      const bonds = new Uint32Array(base64ToBytes(data.topology.bonds).buffer);
+      const elements = bytesToArray(data.topology.elements, Uint8Array);
+      const bonds = bytesToArray(data.topology.bonds, Uint32Array);
 
       frame.topology = { elements, bonds, };
       transfer.push(elements.buffer, bonds.buffer);
     }
 
     if (data.positions) {
-      const positions = new Float32Array(base64ToBytes(data.positions).buffer);
+      const positions = bytesToArray(data.positions, Float32Array);
       frame.positions = positions;
       transfer.push(positions.buffer);
     }
 
     if (data.box) {
-      const box = new Float32Array(base64ToBytes(data.box).buffer);
+      const box = bytesToArray(data.box, Float32Array);
       frame.box = box;
       transfer.push(box.buffer);
     }

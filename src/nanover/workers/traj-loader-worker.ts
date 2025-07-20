@@ -1,5 +1,6 @@
+import { unpack } from "msgpackr";
 import { decode } from "../convert.ts";
-import { TestTrajectory } from "../types";
+import { TestTrajectory, TestTrajectoryDataBytes } from "../types";
 
 export type SetupMessageData = {
   port: MessagePort;
@@ -19,10 +20,15 @@ onmessage = (event) => {
     const { path } = event.data as RecvMessageData;
 
     const response = await fetch(path);
-    const data = await response.json();
+    const blob = await response.blob();
+    const data = unpack(await blob.arrayBuffer()) as TestTrajectoryDataBytes;
     const traj = decode(data);
 
-    port.postMessage({ traj } as SendMessageData);
+    port.postMessage({ traj } as SendMessageData, { transfer: [
+      traj.topology.bonds.buffer,
+      traj.topology.elements.buffer,
+      ...traj.positions.map(e => e.buffer),
+    ]});
   });
   port.start();
 };
