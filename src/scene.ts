@@ -61,6 +61,7 @@ let panel: Object3D;
 let panelRot: Object3D;
 let sliderHandle: Button;
 let range: number;
+let recenter = () => {};
 
 let buttons: Button[] = [];
 
@@ -221,10 +222,11 @@ function init() {
 
   const playButton = make_button("PLAY", () => framePlay.setValue(!framePlay.getValue()));
   const resetButton = make_button("RESET", () => frameSeek.setValue(0));
+  const centerButton = make_button("CENTER", () => recenter());
   const prevButton = make_button("<", () => frameSeek.setValue(frameSeek.getValue()-1));
   const nextButton = make_button(">", () => frameSeek.setValue(frameSeek.getValue()+1));
 
-  buttons.push(playButton, prevButton, nextButton, resetButton);
+  buttons.push(playButton, prevButton, centerButton, nextButton, resetButton);
   const gap = 0.125;
   range = (buttons.length-1) * gap;
   
@@ -538,9 +540,9 @@ function init() {
     }
 
     const trajpaths = [
-      { name: "Ludo GluHUTs", paths: ["ludo-gluhut-0.json", "ludo-gluhut-1.json", "ludo-gluhut-2.json", "ludo-gluhut-3.json", "ludo-gluhut-4.json", "ludo-gluhut-5.json", "ludo-gluhut-6.json"] },
-      { name: "17-Alanine", paths: ["bucky-test.json"] },
-      { name: "Nanotube", paths: ["webtraj.json"] },
+      { name: "Ludo GluHUTs", paths: ["ludo-gluhut-0.msgpack", "ludo-gluhut-1.msgpack", "ludo-gluhut-2.msgpack", "ludo-gluhut-3.msgpack", "ludo-gluhut-4.msgpack", "ludo-gluhut-5.msgpack", "ludo-gluhut-6.msgpack"] },
+      { name: "17-Alanine", paths: ["bucky-test.msgpack"] },
+      { name: "Nanotube", paths: ["webtraj.msgpack"] },
     ];
 
     function loadTrajectories(paths: string[]) {
@@ -553,6 +555,12 @@ function init() {
         path = new URL("./data/" + path, window.location.href).toString();
         trajLoaderChannel.port1.postMessage({ path });
       }
+    }
+
+    recenter = function() {
+      const p = renderer.xr.getCamera().getWorldPosition(new Vector3());
+      const d = renderer.xr.getCamera().getWorldDirection(new Vector3());
+      objects.position.copy(p).addScaledVector(d, 1).sub(cameraControls.target);
     }
 
     const discoveryFolder = gui.addFolder("Discovery");
@@ -569,7 +577,7 @@ function init() {
 
     frameSeek.$widget.onpointerdown = () => framePlay.setValue(false);
 
-    loadTrajectories(trajpaths[1].paths);
+    loadTrajectories(trajpaths[2].paths);
 
     // persist GUI state in local storage on changes
     gui.onFinishChange(() => {
@@ -657,7 +665,7 @@ function animate() {
 
   if (renderer.xr.isPresenting) {
     const camera = renderer.xr.getCamera();
-    panelRot.position.copy(camera.position).y -= .5;
+    panelRot.position.copy(camera.position).y -= .35;
 
     const forward = new Vector3();
     camera.getWorldDirection(forward);
@@ -665,7 +673,7 @@ function animate() {
     forward.multiplyScalar(-1);
     panelRot.lookAt(forward.clone().add(panelRot.position));
     panel.rotation.x = Math.PI * .25;
-    panelRot.position.addScaledVector(forward, -.5);
+    panelRot.position.addScaledVector(forward, -.35);
 
     ui_hover(renderer.xr.getController(0));
     ui_hover(renderer.xr.getController(1));

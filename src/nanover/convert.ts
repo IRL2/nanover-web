@@ -1,4 +1,4 @@
-import { TestTrajectory, TestTrajectoryDataSmall } from "./types";
+import { TestTrajectory, TestTrajectoryDataSmall, TestTrajectoryDataBytes } from "./types";
 
 export function bytesToBase64(array: ArrayBufferView) {
   const bytes = new Uint8Array(array.buffer);
@@ -10,8 +10,9 @@ export function base64ToBytes(str: string) {
 }
 
 export function bytesToArray(bytes: Uint8Array, type: any) {
+  // TODO: can we avoid slicing (copy)
   return new type(
-    bytes.buffer.slice(bytes.byteOffset), 
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 
     0, 
     bytes.byteLength / type.BYTES_PER_ELEMENT,
   )
@@ -24,6 +25,18 @@ export function decode(data: TestTrajectoryDataSmall): TestTrajectory {
       bonds: new Uint32Array(base64ToBytes(data.topology.bonds).buffer),
     },
     positions: data.positions.map((positions) => new Float32Array(base64ToBytes(positions).buffer)),
+  }
+
+  return traj;
+}
+
+export function decode2(data: TestTrajectoryDataBytes): TestTrajectory {
+  const traj = {
+    topology: {
+      elements: bytesToArray(data.topology.elements, Uint8Array),
+      bonds: bytesToArray(data.topology.bonds, Uint32Array),
+    },
+    positions: data.positions.map((positions) => bytesToArray(positions, Float32Array)),
   }
 
   return traj;

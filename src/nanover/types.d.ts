@@ -6,6 +6,14 @@ export type TestTrajectoryDataSmall = {
   positions: string[];
 }
 
+export type TestTrajectoryDataBytes = {
+  topology: {
+    elements: Uint8Array;
+    bonds: Uint8Array;
+  };
+  positions: Uint8Array[];
+}
+
 export type TestTrajectory = {
   topology: {
     elements: Uint8Array;
