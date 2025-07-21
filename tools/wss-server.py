@@ -37,8 +37,8 @@ async def forward_frames(client, websocket):
     bonds = selection.bonds.to_indices().flat
 
     topology = {
-        "elements": pack_array("B", len(elements), elements),
-        "bonds": pack_array("L", len(bonds), bonds),
+        "elements": pack_array("B", elements),
+        "bonds": pack_array("I", bonds),
     }
 
     data = {
@@ -47,25 +47,19 @@ async def forward_frames(client, websocket):
 
     fields = frame.raw.arrays["system.box.vectors"].ListFields()
     array2 = fields[0][1].values
-    data["box"] = pack_array("f", len(array2), array2)
+    data["box"] = pack_array("f", array2)
 
     await websocket.send(msgpack.packb(data))
 
     while True:
         frame = client.current_frame
         if PARTICLE_POSITIONS in frame:
-            #print("FRAME")
             universe = frame_data_to_mdanalysis(frame)
             selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
             data = { 
-                "positions": pack_array("f", len(selection.positions) * 3, (c * .1 for c in selection.positions.flat)),
+                "positions": pack_array("f", (c * .1 for c in selection.positions.flat)),
                 "state": client.latest_multiplayer_values,
             }
-            
-            # print(
-            #     len(data["positions"]),
-            #     len(selection.positions.tobytes()),
-            # )
 
             bin = msgpack.packb(data)
 

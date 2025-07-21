@@ -1,4 +1,4 @@
-import struct
+import numpy as np
 import msgpack
 from typing import Iterable
 from nanover.mdanalysis.converter import ELEMENT_INDEX
@@ -6,17 +6,14 @@ from nanover.mdanalysis.converter import ELEMENT_INDEX
 def write_webtraj(selection, io):
     universe = selection.universe
     
-    elements = (ELEMENT_INDEX[e] for e in selection.elements)
-    bonds = selection.bonds.to_indices().flat
-
     topology = {
-        "elements": pack_array("B", len(selection.elements), elements),
-        "bonds": pack_array("L", len(bonds), bonds),
+        "elements": pack_array("B", (ELEMENT_INDEX[e] for e in selection.elements)),
+        "bonds": pack_array("I", selection.bonds.to_indices().flat),
     }
     
     positions = []
     for t in universe.trajectory:
-        positions.append(pack_array("f", len(selection.positions) * 3, (c * .1 for c in selection.positions.flat)))
+        positions.append(pack_array("f", (c * .1 for c in selection.positions.flat)))
     
     data = {
         "topology": topology,
@@ -25,5 +22,5 @@ def write_webtraj(selection, io):
 
     io.write(msgpack.packb(data))
 
-def pack_array(typecode: str, count: int, values: Iterable):
-    return struct.pack(f"{count}{typecode}", *values)
+def pack_array(dtype: str, values: Iterable):
+    return np.fromiter(values, dtype=dtype).tobytes()
