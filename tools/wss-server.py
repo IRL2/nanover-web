@@ -123,21 +123,25 @@ async def main():
         print("list:", await response.json())
 
     print("RUNNING SERVER")
-    async with websockets.serve(send_frames, "0.0.0.0", 0, ssl=ssl_context) as server:
-        ip = get_local_ip()
-        port = server.sockets[0].getsockname()[1]
+    async with websockets.serve(send_frames, "0.0.0.0", 0) as server_insecure:
+        async with websockets.serve(send_frames, "0.0.0.0", 0, ssl=ssl_context) as server:
+            ip = get_local_ip()
+            port = server.sockets[0].getsockname()[1]
+            port_insecure = server_insecure.sockets[0].getsockname()[1]
 
-        data = {
-            "name": "test server",
-            "web": f"https://{ip}:5500",
-            "endpoint": f"wss://{ip}:{port}",
-        }
+            data = {
+                "name": "test server",
+                "web": f"https://{ip}:5500",
+                "https": f"https://{ip}:5500",
+                "wss": f"wss://{ip}:{port}",
+                "ws": f"ws://{ip}:{port_insecure}",
+            }
 
-        async with websockets.connect("wss://irl-discovery.onrender.com/", open_timeout=5) as discovery:
-            await asyncio.gather(
-                run_discovery(discovery, data),
-                asyncio.Future(),
-            )
+            async with websockets.connect("wss://irl-discovery.onrender.com/", open_timeout=5) as discovery:
+                await asyncio.gather(
+                    run_discovery(discovery, data),
+                    asyncio.Future(),
+                )
 
 
 

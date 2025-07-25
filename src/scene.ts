@@ -529,8 +529,8 @@ function init() {
       test.then((list) => {
         if (list.length > 0) {
           console.log(list);
-          for (const [ , data ] of list) {
-            servers.add({ click: () => connect(data.endpoint) }, "click").name(data.name);
+          for (const { info } of list) {
+            servers.add({ click: () => connect(info.wss) }, "click").name(info.name);
           }
           servers.open();
         } else {
