@@ -16,12 +16,13 @@ from converter import pack_array
 
 async def forward_user(client, websocket):
     while True:
-        data: dict = json.loads(await websocket.recv())
+        data: dict = msgpack.unpackb(await websocket.recv())
         
         change = DictionaryChange(
             updates=data.get("updates", {}),
             removals=data.get("removals", set()),
         )
+
         client.attempt_update_multiplayer_state(change)
 
 
