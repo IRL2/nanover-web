@@ -1,5 +1,5 @@
 import { unpack } from "msgpackr";
-import { bytesToArray } from "../convert.js";
+import { bytesToArray, ArrayConstructor } from "../convert.js";
 import { TestFrame, TestFrameData } from "../types.js";
 
 export type SetupMessageData = {
@@ -39,33 +39,43 @@ onmessage = (event) => {
     console.log("ERROR", event);
   });
 
+  const transfer: Transferable[] = [];
+  function bytesToArrayManaged<TArray extends { buffer: ArrayBuffer }>(bytes: Uint8Array, type: ArrayConstructor<TArray>)
+  {
+    const array = bytesToArray(bytes, type);
+    transfer.push(array.buffer);
+    return array;
+  }
+
   socket.addEventListener("message", async (event) => {
     // console.log("SOCKET MSG");
+
+    transfer.length = 0;
 
     const data = event.data instanceof Blob 
       ? unpack(await event.data.arrayBuffer()) as TestFrameData
       : JSON.parse(event.data) as TestFrameData;
     const frame = {} as TestFrame;
-    const transfer = [];
 
-    if (data.topology) {
-      const elements = bytesToArray(data.topology.elements, Uint8Array);
-      const bonds = bytesToArray(data.topology.bonds, Uint32Array);
+    if (data.frame) {
+      if (data.frame["particle.positions"]) {
+        frame.positions = bytesToArrayManaged(data.frame["particle.positions"], Float32Array);
+      }
+      
+      if (data.frame["particle.elements"]) {
+        frame.elements = bytesToArrayManaged(data.frame["particle.elements"], Uint8Array);
+      }
 
-      frame.topology = { elements, bonds, };
-      transfer.push(elements.buffer, bonds.buffer);
-    }
+      if (data.frame["bond.pairs"]) {
+        frame.bonds = bytesToArrayManaged(data.frame["bond.pairs"], Uint32Array);
+      }
 
-    if (data.positions) {
-      const positions = bytesToArray(data.positions, Float32Array);
-      frame.positions = positions;
-      transfer.push(positions.buffer);
+      frame.frame = data.frame;
     }
 
     if (data.box) {
-      const box = bytesToArray(data.box, Float32Array);
+      const box = bytesToArrayManaged(data.box, Float32Array);
       frame.box = box;
-      transfer.push(box.buffer);
     }
 
     if (data.state) {

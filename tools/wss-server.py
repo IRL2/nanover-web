@@ -1,5 +1,8 @@
 import asyncio
+from functools import partial
 from pathlib import Path
+from typing import Callable, Any
+
 import websockets
 import ssl
 import json
@@ -7,7 +10,8 @@ import aiohttp
 import msgpack
 
 from nanover.app import NanoverImdClient
-from nanover.trajectory.frame_data import PARTICLE_POSITIONS
+from nanover.trajectory.frame_data import PARTICLE_POSITIONS, FrameData, PARTICLE_COUNT, RESIDUE_COUNT, CHAIN_COUNT, \
+    SIMULATION_COUNTER, RESIDUE_CHAINS, BOND_PAIRS, PARTICLE_ELEMENTS, BOX_VECTORS, PARTICLE_RESIDUES
 from nanover.state.state_dictionary import DictionaryChange
 from MDAnalysis import AtomGroup
 from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
@@ -26,24 +30,48 @@ async def forward_user(client, websocket):
         client.attempt_update_multiplayer_state(change)
 
 
-async def forward_frames(client, websocket):
-    limit = 8000
+pack_float32 = partial(pack_array, "f")
+pack_uint32 = partial(pack_array, "I")
+pack_uint8 = partial(pack_array, "B")
 
+converters: dict[str, Callable[[], Any]] = {
+    PARTICLE_COUNT: int,
+    CHAIN_COUNT: int,
+    RESIDUE_COUNT: int,
+    SIMULATION_COUNTER: int,
+
+    PARTICLE_POSITIONS: pack_float32,
+    PARTICLE_ELEMENTS: pack_uint8,
+    PARTICLE_RESIDUES: pack_uint32,
+
+    BOND_PAIRS: pack_uint32,
+
+    RESIDUE_CHAINS: pack_uint32,
+    BOX_VECTORS: pack_float32,
+}
+
+
+def convert_frame(frame: FrameData):
+    data = {}
+
+    for key in frame.value_keys:
+        converter = converters.get(key, lambda value: value)
+        data[key] = converter(frame.values[key])
+
+    for key in frame.array_keys:
+        converter = converters.get(key, list)
+        data[key] = converter(frame.arrays[key])
+
+    return data
+
+
+async def forward_frames(client, websocket):
     frame = client.current_frame
     universe = frame_data_to_mdanalysis(frame)
     add_frame_topology_to_mda(universe, frame)
-    selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
-
-    elements = frame.particle_elements[:len(selection)]
-    bonds = selection.bonds.to_indices().flat
-
-    topology = {
-        "elements": pack_array("B", elements),
-        "bonds": pack_array("I", bonds),
-    }
 
     data = {
-        "topology": topology,
+        "frame": convert_frame(frame),
     }
 
     fields = frame.raw.arrays["system.box.vectors"].ListFields()
@@ -53,23 +81,22 @@ async def forward_frames(client, websocket):
     await websocket.send(msgpack.packb(data))
 
     while True:
-        frame = client.current_frame
+        frame = client.latest_frame
+
         if PARTICLE_POSITIONS in frame:
-            universe = frame_data_to_mdanalysis(frame)
-            selection: AtomGroup = universe.select_atoms(f"index 0:{limit}")
-            data = { 
-                "positions": pack_array("f", (c * .1 for c in selection.positions.flat)),
+            data = {
+                "frame": convert_frame(frame),
                 "state": client.latest_multiplayer_values,
             }
 
             bin = msgpack.packb(data)
 
             await websocket.send(bin)
-        await asyncio.sleep(1/30)
+        await asyncio.sleep(1/60)
 
 
 async def send_frames(websocket):
-    with NanoverImdClient.autoconnect(name="DEMO-general") as nanover_client:
+    with NanoverImdClient.autoconnect(name="DEMO-gluhut") as nanover_client:
         print("CONNECTED")
         nanover_client.subscribe_to_frames()
         nanover_client.subscribe_multiplayer()

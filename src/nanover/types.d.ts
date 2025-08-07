@@ -21,15 +21,17 @@ export type TestFrameData = {
   }
   positions: Uint8Array;
   box: Uint8Array;
-  state: any;
+
+  state: Object.<string, any>;
+  frame: Object.<string, any>;
 }
 
 export type TestFrame = {
-  topology: {
-    elements: Uint8Array;
-    bonds: Uint32Array;
-  }
   positions: Float32Array;
+  elements: Uint8Array;
+  bonds: Uint32Array;
   box: Float32Array;
-  state: any;
+  
+  state: Object.<string, any>;
+  frame: Object.<string, any>;
 }

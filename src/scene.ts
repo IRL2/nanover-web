@@ -407,23 +407,27 @@ function init() {
     framesChannel.port1.addEventListener("message", (event) => {
       const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
 
-      if (frame.topology) {
-        const atomCount = frame.topology.elements.length;
+      if (frame.elements && frame.bonds) {
+        const atomCount = frame.elements.length;
         const colors = new Float32Array(atomCount * 3);
         for (let j = 0; j < atomCount; ++j) {
-          make_color({ topology: frame.topology }, j);
+          make_color({ topology: { elements: frame.elements, bonds: frame.bonds } }, j);
           c.toArray(colors, j * 3);
         }
 
         live.setData(
           new Array(atomCount * 3),
           colors,
-          frame.topology.bonds,
+          frame.bonds,
         );
       }
 
       if (frame.positions) {
         live.setPositions(frame.positions);
+      }
+
+      if (frame.frame) {
+        // console.log(frame.framedata);
       }
 
       if (frame.box) {
