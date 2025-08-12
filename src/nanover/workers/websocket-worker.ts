@@ -1,17 +1,35 @@
-import { unpack } from "msgpackr";
+import { unpack, pack } from "msgpackr";
 import { bytesToArray, ArrayConstructor } from "../convert.js";
-import { TestFrame, TestFrameData } from "../types.js";
+import { TestFrame, TestMessageData } from "../types.js";
 
 export type SetupMessageData = {
   port: MessagePort;
   host: string;
 }
 
+export type CommandRequestData = {
+  id: number;
+  name: string;
+  arguments?: Object;
+}
+
+export type CommandResponseData = {
+  request: Partial<CommandRequestData> & Pick<CommandRequestData, "id">;
+  response: any;
+}
+
 export type RecvMessageData = {
+  state?: {
+    updates: { [key: string]: any };
+    removals: string[];
+  };
+
+  command?: CommandRequestData[];
 }
 
 export type SendMessageData = {
   frame: Partial<TestFrame>;
+  command?: CommandResponseData[];
 }
 
 onmessage = (event) => {
@@ -19,9 +37,9 @@ onmessage = (event) => {
 
   console.log("CONNECTING", host);
 
-  port.addEventListener("message", (event) => {
-    const { } = event.data as RecvMessageData;
-    console.log("WHY", event.data);
+  port.addEventListener("message", (event: { data: RecvMessageData }) => {
+    const bytes = pack(event.data);
+    socket.send(bytes);
   });
   port.start();
 
@@ -39,23 +57,21 @@ onmessage = (event) => {
     console.log("ERROR", event);
   });
 
-  const transfer: Transferable[] = [];
-  function bytesToArrayManaged<TArray extends { buffer: ArrayBuffer }>(bytes: Uint8Array, type: ArrayConstructor<TArray>)
-  {
-    const array = bytesToArray(bytes, type);
-    transfer.push(array.buffer);
-    return array;
-  }
-
   socket.addEventListener("message", async (event) => {
     // console.log("SOCKET MSG");
 
-    transfer.length = 0;
-
     const data = event.data instanceof Blob 
-      ? unpack(await event.data.arrayBuffer()) as TestFrameData
-      : JSON.parse(event.data) as TestFrameData;
+      ? unpack(await event.data.arrayBuffer()) as TestMessageData
+      : JSON.parse(event.data) as TestMessageData;
     const frame = {} as TestFrame;
+
+    const transfer: Transferable[] = [];
+    function bytesToArrayManaged<TArray extends { buffer: ArrayBuffer }>(bytes: Uint8Array, type: ArrayConstructor<TArray>)
+    {
+      const array = bytesToArray(bytes, type);
+      transfer.push(array.buffer);
+      return array;
+    }
 
     if (data.frame) {
       if (data.frame["particle.positions"]) {
@@ -82,6 +98,6 @@ onmessage = (event) => {
       frame.state = data.state;
     }
 
-    port.postMessage({ frame } as SendMessageData, transfer);
+    port.postMessage({ frame, command: data.command } as SendMessageData, transfer);
   });
 };

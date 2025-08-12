@@ -13,7 +13,6 @@ from nanover.app import NanoverImdClient
 from nanover.trajectory.frame_data import PARTICLE_POSITIONS, FrameData, PARTICLE_COUNT, RESIDUE_COUNT, CHAIN_COUNT, \
     SIMULATION_COUNTER, RESIDUE_CHAINS, BOND_PAIRS, PARTICLE_ELEMENTS, BOX_VECTORS, PARTICLE_RESIDUES
 from nanover.state.state_dictionary import DictionaryChange
-from MDAnalysis import AtomGroup
 from nanover.mdanalysis.converter import frame_data_to_mdanalysis, add_frame_topology_to_mda
 
 from converter import pack_array
@@ -22,12 +21,23 @@ async def forward_user(client, websocket):
     while True:
         data: dict = msgpack.unpackb(await websocket.recv())
         
-        change = DictionaryChange(
-            updates=data.get("updates", {}),
-            removals=data.get("removals", set()),
-        )
+        if "state" in data:
+            change = DictionaryChange(
+                updates=data["state"].get("updates", {}),
+                removals=data["state"].get("removals", set()),
+            )
 
-        client.attempt_update_multiplayer_state(change)
+            client.attempt_update_multiplayer_state(change)
+    
+        if "command" in data:
+            for request in data["command"]:
+                args = request.get("arguments", {})
+                result = client._frame_client.run_command(request["name"], **args)
+                message = { "command": [{
+                    "request": request,
+                    "response": result,
+                }]}
+                await websocket.send(msgpack.packb(message))
 
 
 pack_float32 = partial(pack_array, "f")
@@ -96,7 +106,7 @@ async def forward_frames(client, websocket):
 
 
 async def send_frames(websocket):
-    with NanoverImdClient.autoconnect(name="DEMO-gluhut") as nanover_client:
+    with NanoverImdClient.autoconnect(name="DEMO-general") as nanover_client:
         print("CONNECTED")
         nanover_client.subscribe_to_frames()
         nanover_client.subscribe_multiplayer()
@@ -158,7 +168,7 @@ async def main():
             port_insecure = server_insecure.sockets[0].getsockname()[1]
 
             data = {
-                "name": "test server",
+                "name": "mark server",
                 "web": f"https://{ip}:5500",
                 "https": f"https://{ip}:5500",
                 "wss": f"wss://{ip}:{port}",

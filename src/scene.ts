@@ -42,6 +42,7 @@ import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 
 import { Text } from "troika-three-text";
 import Button from './scrap/button'
+import { CommandRequestData } from './nanover/workers/websocket-worker'
 
 const CANVAS_ID = 'scene'
 
@@ -378,12 +379,12 @@ function init() {
   // ==== 🐞 DEBUG GUI ====
   {
     const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
-    const framesChannel = new MessageChannel();
+    const websocketChannel = new MessageChannel();
 
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
 
     function connect(host: string) {
-      websocketWorker.postMessage({ port: framesChannel.port2, host }, { transfer: [framesChannel.port2] });
+      websocketWorker.postMessage({ port: websocketChannel.port2, host }, { transfer: [websocketChannel.port2] });
     }
 
     const boxMesh = new Mesh(
@@ -404,10 +405,22 @@ function init() {
 
     const texts: Set<Text> = new Set();
 
-    framesChannel.port1.addEventListener("message", (event) => {
-      const { frame } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
+    websocketChannel.port1.addEventListener("message", (event) => {
+      const { frame, command } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
 
-      if (frame.elements && frame.bonds) {
+      if (command) {
+        for (const response of command) {
+          const resolve = pendingCommands.get(response.request.id);
+
+          if (resolve) {
+            resolve(response.response);
+          } else {
+            console.log("RESPONSE TO UNKNOWN REQUEST", response);
+          }
+        }
+      }
+
+      if (frame?.elements && frame?.bonds) {
         const atomCount = frame.elements.length;
         const colors = new Float32Array(atomCount * 3);
         for (let j = 0; j < atomCount; ++j) {
@@ -422,15 +435,11 @@ function init() {
         );
       }
 
-      if (frame.positions) {
+      if (frame?.positions) {
         live.setPositions(frame.positions);
       }
 
-      if (frame.frame) {
-        // console.log(frame.framedata);
-      }
-
-      if (frame.box) {
+      if (frame?.box) {
         // @ts-ignore
         const m = new Matrix3(...frame.box);
         const x = new Vector3();
@@ -453,7 +462,7 @@ function init() {
         // objects.position.sub(test).y += 1;
       }
 
-      if (frame.state) {
+      if (frame?.state) {
         avatars.count = 0;
         avatars.instanceMatrix.needsUpdate = true;
         if (avatars.instanceColor) avatars.instanceColor.needsUpdate = true;
@@ -481,7 +490,7 @@ function init() {
           cameraControls.update();
         }
 
-        for (const [key, value] of Object.entries(frame.state)) {
+        for (const [key, value] of Object.entries(frame?.state)) {
           if (key.startsWith("interaction.") && frame.positions) {
             t.fromArray(frame.positions, (value as any).particles[0] * 3);
             r.identity();
@@ -523,7 +532,7 @@ function init() {
         }
       }
     });
-    framesChannel.port1.start();
+    websocketChannel.port1.start();
 
     const refresh = () => {
       const test = fetch("https://irl-discovery.onrender.com/list").then((r) => r.json());
@@ -581,24 +590,51 @@ function init() {
 
     frameSeek.$widget.onpointerdown = () => framePlay.setValue(false);
 
-    loadTrajectories(trajpaths[2].paths);
+    const pendingCommands = new Map<number, (value: any) => void>();
+    let nextCommandId = 1;
 
-    // persist GUI state in local storage on changes
-    gui.onFinishChange(() => {
-      const guiState = gui.save()
-      localStorage.setItem('guiState', JSON.stringify(guiState))
-    })
+    async function run_command(name: string, args: Object | undefined = undefined): Promise<any> {
+      return new Promise<any>((resolve) => {
+        const request: CommandRequestData = {
+          id: nextCommandId,
+          name,
+        };
 
-    // load GUI state if available in local storage
-    const guiState = localStorage.getItem('guiState')
-    if (guiState) gui.load(JSON.parse(guiState))
+        if (args) {
+          request.arguments = args;
+        }
 
-    // reset GUI state button
-    const resetGui = () => {
-      localStorage.removeItem('guiState')
-      gui.reset()
+        nextCommandId += 1;
+
+        pendingCommands.set(request.id, resolve);
+        websocketChannel.port1.postMessage({ command: [request] });
+      });
     }
-    gui.add({ resetGui }, 'resetGui').name('RESET')
+
+    const simulationsFolder = gui.addFolder("Simulations");
+
+    function reset() {
+      run_command("playback/reset");
+    }
+
+    async function list() {
+      const result = await run_command("playback/list");
+      const sims = result.simulations;
+
+      for (let i = 0; i < sims.length; ++i) {
+        function load() {
+          run_command("playback/load", { index: i });
+        }
+
+        simulationsFolder.add({ load }, "load").name(sims[i]);
+      }
+    }
+
+    const commandsFolder = gui.addFolder("Commands");
+    commandsFolder.add({ reset }, "reset").name("Reset");
+    commandsFolder.add({ list }, "list").name("List Sims");
+
+    loadTrajectories(trajpaths[2].paths);
   }
 }
 

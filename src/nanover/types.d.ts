@@ -14,16 +14,12 @@ export type TestTrajectory = {
   positions: Float32Array[];
 }
 
-export type TestFrameData = {
-  topology?: {
-    elements: Uint8Array;
-    bonds: Uint8Array;
-  }
-  positions: Uint8Array;
+export type TestMessageData = {
   box: Uint8Array;
 
   state: Object.<string, any>;
   frame: Object.<string, any>;
+  command?: any[];
 }
 
 export type TestFrame = {
