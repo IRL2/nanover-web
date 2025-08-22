@@ -64,15 +64,13 @@ openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out local
 
 This won't work in Firefox because it disallows connecting to self-signed websockets.
 
-Install dependencies:
+Switch to the websocket server branch of nanover-server-py:
 ```bash
-pip install websockets aiohttp msgpack
+cd nanover-server-py
+git checkout feature/websocket-server
 ```
 
-Run a NanoVer python server as usual (e.g with nanover-omni or a jupyter notebook).
-
-Run the websocket converter:
+Run a NanoVer python server with nanover-omni:
 ```bash
-cd tools
-python wss-server.py
+nanover-omni --omm tutorials/ase/openmm_files/17-ala.xml
 ```
