@@ -64,13 +64,7 @@ openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out local
 
 This won't work in Firefox because it disallows connecting to self-signed websockets.
 
-Switch to the websocket server branch of nanover-server-py:
+Run a NanoVer python server with nanover-omni, giving ssl credentials, and the cloud discovery address:
 ```bash
-cd nanover-server-py
-git checkout feature/websocket-server
-```
-
-Run a NanoVer python server with nanover-omni:
-```bash
-nanover-omni --omm tutorials/ase/openmm_files/17-ala.xml
+nanover-omni --omm tutorials/ase/openmm_files/17-ala.xml --ssl localhost.pem localhost.key key_password --cloud-discovery irl-discovery.onrender.com
 ```
