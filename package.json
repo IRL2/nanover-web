@@ -9,7 +9,7 @@
     "preview": "vite preview --host --open"
   },
   "devDependencies": {
-    "@types/three": "^0.179.0",
+    "@types/three": "^0.180.0",
     "typescript": "^5.9.2",
     "vite": "^7.0.6"
   },
@@ -17,7 +17,7 @@
     "lil-gui": "^0.20.0",
     "msgpackr": "^1.11.5",
     "stats.js": "^0.17.0",
-    "three": "^0.179.1",
+    "three": "^0.180.0",
     "troika-three-text": "^0.52.4"
   }
 }
