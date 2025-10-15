@@ -607,7 +607,7 @@ function init() {
         nextCommandId += 1;
 
         pendingCommands.set(request.id, resolve);
-        websocketChannel.port1.postMessage({ command: [request] });
+        websocketChannel.port1.postMessage({ command: { request }});
       });
     }
 

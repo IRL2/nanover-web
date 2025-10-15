@@ -58,8 +58,6 @@ onmessage = (event) => {
   });
 
   socket.addEventListener("message", async (event) => {
-    // console.log("SOCKET MSG");
-
     const data = event.data instanceof Blob 
       ? unpack(await event.data.arrayBuffer()) as TestMessageData
       : JSON.parse(event.data) as TestMessageData;
