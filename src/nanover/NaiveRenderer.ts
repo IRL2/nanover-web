@@ -3,8 +3,8 @@
 import * as THREE from "three";
 
 const DEFAULT_OPTIONS = {
-  atomLimit: 2048,
-  bondLimit: 2048,
+  atomLimit: 20480,
+  bondLimit: 20480,
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
