@@ -46,6 +46,8 @@ import { CommandRequestData } from './nanover/workers/websocket-worker'
 
 import { GDrivePicker } from './helpers/gdrive-picker';
 
+declare const gapi: any;
+
 const CANVAS_ID = 'scene'
 
 let canvas: HTMLElement
@@ -669,11 +671,46 @@ function init() {
       }
     });
 
-     gdrivePicker.onFileSelected((files) => {
+    gdrivePicker.onFileSelected(async (files) => {
       console.log('Selected files:', files);
       const fileNames = files.map((f: any) => f.driveData.name).join(', ');
       pickerStates.selectedFiles = fileNames || 'No files';
       filesController.updateDisplay();
+
+      // clear existing trajectories
+
+      for (const { renderer } of pairs) {
+        renderer.removeFromParent();
+      }
+      pairs.length = 0;
+
+      // download and load each selected file
+      for (const file of files) {
+        const fileId = file.driveData.id;
+
+        try {
+          // download file
+          const response = await gapi.client.drive.files.get({
+            fileId: fileId,
+            alt: 'media'
+          });
+
+          // convert response to ArrayBuffer
+          const blob = await fetch(`data:application/octet-stream;base64,${btoa(response.body)}`).then(r => r.blob());
+          const arrayBuffer = await blob.arrayBuffer();
+
+          // send to trajectory loader worker
+          trajLoaderChannel.port1.postMessage({
+            arrayBuffer: arrayBuffer,
+            filename: file.driveData.name
+          }, [arrayBuffer]);
+
+        } catch (error) {
+          console.error('Failed to load file from Google Drive:', error);
+          pickerStates.status = 'Failed to load file';
+          statusController.updateDisplay();
+        }
+      }
     });
 
     loadTrajectories(trajpaths[2].paths);
