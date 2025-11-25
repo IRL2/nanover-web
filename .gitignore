@@ -27,3 +27,6 @@ dist-ssr
 # ssl
 localhost.key
 localhost.pem
+
+.env
+.env.local

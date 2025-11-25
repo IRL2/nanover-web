@@ -44,6 +44,8 @@ import { Text } from "troika-three-text";
 import Button from './scrap/button'
 import { CommandRequestData } from './nanover/workers/websocket-worker'
 
+import { GDrivePicker } from './helpers/gdrive-picker';
+
 const CANVAS_ID = 'scene'
 
 let canvas: HTMLElement
@@ -633,6 +635,46 @@ function init() {
     const commandsFolder = gui.addFolder("Commands");
     commandsFolder.add({ reset }, "reset").name("Reset");
     commandsFolder.add({ list }, "list").name("List Sims");
+
+    //google drive picker
+    const gdrivePicker = new GDrivePicker();
+    const pickerFolder = gui.addFolder("Google Drive Picker");
+
+    const pickerStates = {
+      authorized: false,
+      status: 'Initializing...',
+      selectedFiles: 'No files selected',
+    };
+
+    const statusController = pickerFolder.add(pickerStates, 'status').name('Status').disable();
+    const filesController = pickerFolder.add(pickerStates, 'selectedFiles').name('Selected Files').disable();
+
+    const authorizeController = pickerFolder.add({ authorize: () => {
+      gdrivePicker.authorize().then(() => {
+        pickerStates.authorized = true;
+        pickerStates.status = 'Authorized';
+        statusController.updateDisplay();
+        authorizeController.name('Open');
+      }).catch((error: any) => {
+        console.error('Authorization failed:', error);
+        pickerStates.status = 'Authorization failed';
+        statusController.updateDisplay();
+      });
+    } }, 'authorize').name('Authorize');
+
+    gdrivePicker.onAuthReady((isReady) => {
+      if (isReady) {
+        pickerStates.status = 'Ready to authorize';
+        statusController.updateDisplay();
+      }
+    });
+
+     gdrivePicker.onFileSelected((files) => {
+      console.log('Selected files:', files);
+      const fileNames = files.map((f: any) => f.driveData.name).join(', ');
+      pickerStates.selectedFiles = fileNames || 'No files';
+      filesController.updateDisplay();
+    });
 
     loadTrajectories(trajpaths[2].paths);
   }
