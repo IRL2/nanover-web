@@ -576,6 +576,14 @@ function init() {
       objects.position.copy(p).addScaledVector(d, 1).sub(cameraControls.target);
     }
 
+    const directConnect = () => {
+      connect("wss://nanover-server-js.onrender.com");
+    }
+
+    const connectFolder = gui.addFolder("Direct");
+    
+    connectFolder.add({ directConnect }, "directConnect").name("Connect");
+
     const discoveryFolder = gui.addFolder("Discovery");
     discoveryFolder.add({ refresh }, "refresh").name("Refresh");
     let servers = discoveryFolder.addFolder("Servers");
