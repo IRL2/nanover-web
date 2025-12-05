@@ -105,7 +105,7 @@ export class GDrivePicker {
 
   private createPicker() {
     const view = new google.picker.View(google.picker.ViewId.DOCS);
-    // view.setMimeTypes('application/vnd.msgpack'); does not work for some reason...
+    view.setMimeTypes('application/octet-stream');
     const picker = new google.picker.PickerBuilder()
       .enableFeature(google.picker.Feature.NAV_HIDDEN)
       .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
