@@ -3,6 +3,7 @@ import {
   AmbientLight,
   BackSide,
   BoxGeometry,
+  BufferGeometry,
   CapsuleGeometry,
   Clock,
   Color,
@@ -11,6 +12,8 @@ import {
   Group,
   IcosahedronGeometry,
   InstancedMesh,
+  Line,
+  LineBasicMaterial,
   LineSegments,
   Matrix3,
   Matrix4,
@@ -46,6 +49,12 @@ import { CommandRequestData } from './nanover/workers/websocket-worker'
 
 import { GDrivePicker } from './helpers/gdrive-picker';
 
+// UIKit imports
+import { Container, reversePainterSortStable, Text as UIText } from '@pmndrs/uikit';
+
+// Pointer events for XR raycasting
+import { createRayPointer, Pointer } from '@pmndrs/pointer-events';
+
 declare const gapi: any;
 
 const CANVAS_ID = 'scene'
@@ -70,21 +79,50 @@ let recenter = () => {};
 
 let buttons: Button[] = [];
 
+// UIKit root container
+let controlPanel: Container | undefined;
+let sliderContainer: Container | undefined;
+let uikitButtons: { container: Container, onClick: () => void, originalColor: number }[] = [];
+let playButtonText: UIText | undefined;
+let showPanelInDesktop = false; // Debug option to view panel outside XR
+let uikitSliderHandle: Container | undefined;
+let uikitSliderTrack: Container | undefined;
+
+// XR Ray Pointers for UIKit interaction
+let xrPointers: { pointer: Pointer, controller: Group, rayLine: Line }[] = [];
 function ui_hover(group: Group<WebXRSpaceEventMap>) {
   const p = new Vector3();
   const c = new Vector3();
   group.userData ??= {};
   group.userData.hovered?.exit();
   group.userData.hovered = undefined;
+  group.userData.hoveredUIKit = undefined;
 
   group.getWorldPosition(c);
 
+  // Check old buttons
   for (const button of buttons) {
     button.face.getWorldPosition(p);
     const d = p.distanceTo(c);
     const close = d < .075;
 
     if (close) group.userData.hovered = button;
+  }
+
+  // Check UIKit buttons
+  for (const uiButton of uikitButtons) {
+    uiButton.container.getWorldPosition(p);
+    const d = p.distanceTo(c);
+    const close = d < .1;
+
+    if (close) {
+      group.userData.hoveredUIKit = uiButton;
+      // Visual feedback - brighten color on hover
+      uiButton.container.setProperties({ backgroundColor: uiButton.originalColor + 0x303030 });
+    } else {
+      // Reset to original color
+      uiButton.container.setProperties({ backgroundColor: uiButton.originalColor });
+    }
   }
 
   group.userData.hovered?.enter();
@@ -106,6 +144,110 @@ const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
 
+// Initialize UIKit
+function initUIKit() {
+  // Create root container for UIKit control panel
+  controlPanel = new Container({
+    sizeX: 0.9,
+    sizeY: 0.35,
+    flexDirection: "column",
+    backgroundColor: 0x1a1a1a,
+    padding: 2,
+    gap: 1,
+    borderRadius: 2,
+  });
+  
+  // Position will be updated in animate loop for XR
+  controlPanel.position.set(0, 0, 0);
+  panelRot.add(controlPanel);
+
+  // Button container (horizontal row)
+  const buttonRow = new Container({
+    flexDirection: "row",
+    gap: 3,
+    justifyContent: "center",
+    alignItems: "center",
+  });
+
+  // Create UIKit buttons with same functionality as before
+  function createUIButton(label: string, color: number, onClick: () => void) {
+    const btn = new Container({
+      width: 20,
+      height: 10,
+      backgroundColor: color,
+      borderRadius: 2,
+      justifyContent: "center",
+      alignItems: "center",
+      cursor: "pointer",
+    });
+
+    const btnText = new UIText({
+      fontSize: 3,
+      color: 0xffffff,
+      anchorX: "center",
+      anchorY: "middle",
+    });
+    
+    btnText.setProperties({ text: label } as any);
+
+    btn.add(btnText);
+    
+    // Track button for XR interaction
+    uikitButtons.push({ container: btn, onClick, originalColor: color });
+
+    return btn;
+  }
+
+  // Create all buttons
+  const prevBtn = createUIButton("<", 0x444444, () => frameSeek.setValue(frameSeek.getValue()-1));
+  const playBtn = createUIButton("PLAY", 0x2196F3, () => {
+    framePlay.setValue(!framePlay.getValue());
+    // Update button text based on state
+    if (playButtonText) {
+      playButtonText.setProperties({ text: framePlay.getValue() ? "PAUSE" : "PLAY" } as any);
+    }
+  });
+  const nextBtn = createUIButton(">", 0x444444, () => frameSeek.setValue(frameSeek.getValue()+1));
+  const resetBtn = createUIButton("RESET", 0x666666, () => frameSeek.setValue(0));
+  const centerBtn = createUIButton("CENTER", 0x666666, () => recenter());
+  
+  // Store play button text for updates
+  playButtonText = playBtn.children[0] as UIText;
+
+  buttonRow.add(prevBtn, playBtn, nextBtn, resetBtn, centerBtn);
+
+  // Slider container
+  sliderContainer = new Container({
+    height: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  });
+
+  // Slider track
+  uikitSliderTrack = new Container({
+    flexGrow: 1,
+    height: 8,
+    backgroundColor: 0x333333,
+    borderRadius: 4,
+  });
+
+  // Slider handle (will be positioned dynamically)
+  uikitSliderHandle = new Container({
+    width: 10,
+    height: 10,
+    backgroundColor: 0x2196F3,
+    borderRadius: 10,
+    positionType: "absolute",
+    positionLeft: 0,
+  });
+
+  uikitSliderTrack.add(uikitSliderHandle);
+  sliderContainer.add(uikitSliderTrack);
+
+  controlPanel.add(buttonRow, sliderContainer);
+}
+
 init()
 
 function init() {
@@ -122,6 +264,10 @@ function init() {
     renderer.xr.addEventListener("sessionstart", enter_xr);
     renderer.xr.addEventListener("sessionend", exit_xr);
 
+    // Enable required settings for UIKit
+    renderer.localClippingEnabled = true;
+    renderer.setTransparentSort(reversePainterSortStable);
+
     function enter_xr() {
       const session = renderer.xr.getSession()!;
       console.log(session.enabledFeatures);
@@ -129,7 +275,7 @@ function init() {
     }
 
     function exit_xr() {
-
+      // Cleanup if needed
     }
 
     function onSelect(event: XRInputSourceEvent) {
@@ -343,8 +489,9 @@ function init() {
     function add_clicker(grip: Group<WebXRSpaceEventMap>, name = "UNKNOWN") {
       grip.userData = { name };
       grip.addEventListener("select", () => {
-        console.log("SELECT", grip.userData.name, grip.userData.hovered);
+        console.log("SELECT", grip.userData.name, grip.userData.hovered, grip.userData.hoveredUIKit);
         grip.userData.hovered?.onclick();
+        grip.userData.hoveredUIKit?.onClick();
       });
     }
 
@@ -380,12 +527,22 @@ function init() {
     document.body.appendChild(XRButton.createButton(renderer, { optionalFeatures: ["anchors", "hand-tracking"] }));
   }
 
+  // ===== UIKit Setup =====
+  initUIKit();
+
   // ==== 🐞 DEBUG GUI ====
   {
     const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
     const websocketChannel = new MessageChannel();
 
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
+    
+    // Add UIKit debug option
+    const uikitFolder = gui.addFolder("UIKit Debug");
+    uikitFolder.add({ showInDesktop: showPanelInDesktop }, "showInDesktop").name("Show Panel in Desktop").onChange((value: boolean) => {
+      showPanelInDesktop = value;
+    });
+    uikitFolder.open();
 
     function connect(host: string) {
       websocketWorker.postMessage({ port: websocketChannel.port2, host }, { transfer: [websocketChannel.port2] });
@@ -769,6 +926,23 @@ function animate() {
 
   stats.begin()
 
+  // Update UIKit control panel
+  if (controlPanel) {
+    controlPanel.update(dt * 1000); // UIKit expects milliseconds
+    
+    // Update UIKit slider handle position after layout update
+    if (uikitSliderHandle && uikitSliderTrack) {
+      const trackSize = uikitSliderTrack.size.peek();
+      if (trackSize) {
+        const trackWidth = trackSize[0];
+        const handleWidth = 20;
+        const u = frameSeek.getValue() / max;
+        const handleLeft = (trackWidth - handleWidth) * u;
+        uikitSliderHandle.setProperties({ positionLeft: handleLeft });
+      }
+    }
+  }
+
   if (!renderer.xr.isPresenting && resizeRendererToDisplaySize(renderer)) {
     const canvas = renderer.domElement
     camera.aspect = canvas.clientWidth / canvas.clientHeight
@@ -780,24 +954,42 @@ function animate() {
   renderer.render(scene, camera)
   stats.end()
 
-  panel.visible = renderer.xr.isPresenting;
+  panel.visible = false; // Hide old button panel
+  if (controlPanel) {
+    controlPanel.visible = renderer.xr.isPresenting || showPanelInDesktop;
+  }
 
   if (renderer.xr.isPresenting) {
     const camera = renderer.xr.getCamera();
-    panelRot.position.copy(camera.position).y -= .35;
+    panelRot.position.copy(camera.position);
+    panelRot.position.y -= 0.5; // Lower position - at waist height
 
     const forward = new Vector3();
     camera.getWorldDirection(forward);
     forward.y = 0;
-    forward.multiplyScalar(-1);
-    panelRot.lookAt(forward.clone().add(panelRot.position));
-    panel.rotation.x = Math.PI * .25;
-    panelRot.position.addScaledVector(forward, -.35);
+    forward.normalize();
+    panelRot.position.addScaledVector(forward, 0.4); // Move forward in front of user
+    
+    // Make panel face the user
+    panelRot.lookAt(camera.position);
+    if (controlPanel) {
+      controlPanel.rotation.x = Math.PI * 0.15; // Slight tilt
+    }
 
     ui_hover(renderer.xr.getController(0));
     ui_hover(renderer.xr.getController(1));
     ui_hover(renderer.xr.getHand(0));
     ui_hover(renderer.xr.getHand(1));
+  } else if (showPanelInDesktop && controlPanel) {
+    // Position panel in front of desktop camera for debugging
+    panelRot.position.copy(camera.position);
+    const forward = new Vector3();
+    camera.getWorldDirection(forward);
+    panelRot.position.addScaledVector(forward, 2);
+    panelRot.lookAt(camera.position);
+    if (controlPanel) {
+      controlPanel.rotation.x = 0;
+    }
   }
 
   if (renderer.xr.isPresenting && calibAnchor) {

@@ -14,10 +14,16 @@
     "vite": "^7.0.6"
   },
   "dependencies": {
+    "@pmndrs/pointer-events": "^6.6.29",
+    "@pmndrs/uikit": "^1.0.61",
+    "@pmndrs/uikit-default": "^1.0.61",
+    "digitalbacon-ui": "^0.2.1",
     "lil-gui": "^0.20.0",
     "msgpackr": "^1.11.5",
     "stats.js": "^0.17.0",
     "three": "^0.179.1",
+    "three-mesh-ui": "^6.5.4",
+    "three-stdlib": "^2.36.1",
     "troika-three-text": "^0.52.4"
   }
 }
