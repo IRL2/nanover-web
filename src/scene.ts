@@ -964,7 +964,7 @@ function init() {
     let isScanningQR = false;
     let detectedUrl = "";
 
-    const resultController = qrFolder.add(qrState, "lastResult").name("Result").listen();
+    qrFolder.add(qrState, "lastResult").name("Result").listen();
     
     const loadScannedFile = async () => {
       if (!detectedUrl) return;
