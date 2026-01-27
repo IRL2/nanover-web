@@ -7,7 +7,9 @@ export type SetupMessageData = {
 }
 
 export type RecvMessageData = {
-  path: string;
+  path?: string;
+  arrayBuffer?: ArrayBuffer;
+  filename?: string;
 }
 
 export type SendMessageData = {
@@ -17,11 +19,23 @@ export type SendMessageData = {
 onmessage = (event) => {
   const { port } = event.data as SetupMessageData;
   port.addEventListener("message", async (event) => {
-    const { path } = event.data as RecvMessageData;
+    const { path, arrayBuffer, filename } = event.data as RecvMessageData;
 
-    const response = await fetch(path);
-    const blob = await response.blob();
-    const data = unpack(await blob.arrayBuffer()) as TestTrajectoryDataBytes;
+    let data: TestTrajectoryDataBytes;
+
+    if (arrayBuffer) {
+      // Handle ArrayBuffer from Google Drive
+      console.log('Loading trajectory from Google Drive:', filename);
+      data = unpack(arrayBuffer) as TestTrajectoryDataBytes;
+    } else if (path) {
+      const response = await fetch(path);
+      const blob = await response.blob();
+      data = unpack(await blob.arrayBuffer()) as TestTrajectoryDataBytes;
+    } else {
+      console.error('No path or arrayBuffer provided');
+      return;
+    }
+
     const traj = decode(data);
 
     port.postMessage({ traj } as SendMessageData, { transfer: [
