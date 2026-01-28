@@ -4,7 +4,6 @@ import {
   BackSide,
   BoxGeometry,
   BufferAttribute,
-  CapsuleGeometry,
   Clock,
   Color,
   CylinderGeometry,
@@ -43,16 +42,15 @@ import { OBJLoader } from 'three/examples/jsm/Addons.js'
 import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 
 import { Text } from "troika-three-text";
-import Button from './scrap/button'
 import { CommandRequestData } from './nanover/workers/websocket-worker'
 
 import { GDrivePicker } from './helpers/gdrive-picker';
 
-import { Container, reversePainterSortStable, Text as UIText } from '@pmndrs/uikit';
-import { Slider } from '@pmndrs/uikit-default';
+import { reversePainterSortStable } from '@pmndrs/uikit';
 import { createRayPointer, Pointer } from '@pmndrs/pointer-events';
 
-import jsQR from 'jsqr';
+import { setupXRUI, updateXRUI, uikitButtons, setShowPanelInDesktop, showPanelInDesktop } from './ui/xrUI';
+import { setupQRScanner } from './helpers/qrReader';
 
 declare const gapi: any;
 
@@ -70,22 +68,26 @@ let live: NaiveRenderer;
 let frameSeek: Controller;
 let framePlay: Controller;
 let frameTimer = 0.0;
-let panel: Object3D;
 let panelRot: Object3D;
-let sliderHandle: Button;
-let range: number;
 let recenter = () => {};
 
-let buttons: Button[] = [];
-
-// UIKit root container
-let controlPanel: Container | undefined;
-let uikitButtons: { container: Container, onClick: () => void, originalColor: number }[] = [];
-let playButtonText: UIText | undefined;
-let showPanelInDesktop = false;
-let uikitSlider: Slider | undefined;
-
 let xrPointers: { pointer: Pointer, controller: Group, rayLine: Mesh }[] = [];
+
+// grab/scale State
+const grippingControllers: Group[] = [];
+const grabState = {
+  active: false,
+  count: 0,
+  prevDist: 0,
+  prevCenter: new Vector3(),
+};
+
+function getURLParam(param: string): string | null {
+  const paramsString = window.location.search;
+  const urlParams = new URLSearchParams(paramsString);
+  return urlParams.get(param); 
+}
+
 function ui_hover(group: Group<WebXRSpaceEventMap>) {
   const p = new Vector3();
   const c = new Vector3();
@@ -95,14 +97,6 @@ function ui_hover(group: Group<WebXRSpaceEventMap>) {
   group.userData.hoveredUIKit = undefined;
 
   group.getWorldPosition(c);
-
-  for (const button of buttons) {
-    button.face.getWorldPosition(p);
-    const d = p.distanceTo(c);
-    const close = d < .075;
-
-    if (close) group.userData.hovered = button;
-  }
 
   for (const uiButton of uikitButtons) {
     uiButton.container.getWorldPosition(p);
@@ -133,122 +127,6 @@ const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
 
-// Initialize UIKit
-function initUIKit() {
-  //  root container control panel
-  controlPanel = new Container({
-    sizeX: 0.9,
-    sizeY: 0.35,
-    flexDirection: "column",
-    backgroundColor: 0x1a1a1a,
-    padding: 2,
-    gap: 5,
-    borderRadius: 2,
-  });
-
-  controlPanel.position.set(0, 0, 0);
-  panelRot.add(controlPanel);
-
-  // button container (horizontal row)
-  const buttonRow = new Container({
-    flexDirection: "row",
-    gap: 3,
-    justifyContent: "center",
-    alignItems: "center",
-  });
-
-  // custom button container
-  function createUIButton(label: string, color: number, onClick: () => void) {
-    const btn = new Container({
-      width: 20,
-      height: 10,
-      backgroundColor: color,
-      borderRadius: 2,
-      justifyContent: "center",
-      alignItems: "center",
-      cursor: "pointer",
-      pointerEvents: "auto",
-    });
-
-    const btnText = new UIText({
-      fontSize: 3,
-      color: 0xffffff,
-      anchorX: "center",
-      anchorY: "middle",
-    });
-    
-    btnText.setProperties({ text: label } as any);
-
-    btn.add(btnText);
-    
-    // pointer event listeners for raycasting
-    btn.addEventListener('click', onClick);
-    btn.addEventListener('pointerenter', () => {
-      btn.setProperties({ backgroundColor: color + 0x303030 });
-    });
-    btn.addEventListener('pointerleave', () => {
-      btn.setProperties({ backgroundColor: color });
-    });
-    
-    uikitButtons.push({ container: btn, onClick, originalColor: color });
-
-    return btn;
-  }
-
-  const prevBtn = createUIButton("<", 0x444444, () => frameSeek.setValue(frameSeek.getValue()-1));
-  const playBtn = createUIButton("PLAY", 0x2196F3, () => {
-    framePlay.setValue(!framePlay.getValue());
-
-    if (playButtonText) {
-      playButtonText.setProperties({ text: framePlay.getValue() ? "PAUSE" : "PLAY" } as any);
-    }
-  });
-  const nextBtn = createUIButton(">", 0x444444, () => frameSeek.setValue(frameSeek.getValue()+1));
-  const resetBtn = createUIButton("RESET", 0x666666, () => frameSeek.setValue(0));
-  const centerBtn = createUIButton("CENTER", 0x666666, () => recenter());
-  
-  playButtonText = playBtn.children[0] as UIText;
-
-  buttonRow.add(prevBtn, playBtn, nextBtn, resetBtn, centerBtn);
-
-  // UIKit default Slider component
-  uikitSlider = new Slider();
-  uikitSlider.setProperties({
-    width: "100%",
-    value: 0,
-    min: 0,
-    max: 1,
-    step: 1,
-    pointerEvents: "auto",
-    onValueChange: (value: number) => {
-      console.log("Slider value changed:", value, "frameSeek:", frameSeek);
-      if (frameSeek) {
-        framePlay.setValue(false); // stop playback when user drags
-        frameSeek.setValue(Math.round(value));
-      }
-    },
-  } as any);
-
-// Make thumb smaller (default is 20x20)
-if (uikitSlider.thumb) {
-  uikitSlider.thumb.setProperties({
-    borderColor: 0x888888,
-    height: 12,
-    width: 12,
-    transformTranslateX: -6,
-    transformTranslateY: -4,
-  } as any);
-}
-
-if (uikitSlider.track) {
-  uikitSlider.track.setProperties({
-    height: 4,
-  } as any);
-}
-
-  controlPanel.add(buttonRow, uikitSlider);
-}
-
 init()
 
 function init() {
@@ -273,6 +151,10 @@ function init() {
       const session = renderer.xr.getSession()!;
       console.log(session.enabledFeatures);
       session.addEventListener('select', onSelect);
+
+      setTimeout(() => {
+        recenter();
+      }, 500);
     }
 
     function exit_xr() {
@@ -360,48 +242,9 @@ function init() {
     objects.add(interactions);
   }
 
+  // anchor for the UI Panel
   panelRot = new Object3D();
-  panel = new Object3D();
-  panelRot.add(panel);
   scene.add(panelRot);
-
-  function make_button(label: string, onclick = () => {}) {
-    const button = new Button(label);
-    button.onclick = onclick;
-    button.scale.multiplyScalar(.05);
-    return button;
-  }
-
-  const playButton = make_button("PLAY", () => framePlay.setValue(!framePlay.getValue()));
-  const resetButton = make_button("RESET", () => frameSeek.setValue(0));
-  const centerButton = make_button("CENTER", () => recenter());
-  const prevButton = make_button("<", () => frameSeek.setValue(frameSeek.getValue()-1));
-  const nextButton = make_button(">", () => frameSeek.setValue(frameSeek.getValue()+1));
-
-  buttons.push(playButton, prevButton, centerButton, nextButton, resetButton);
-  const gap = 0.125;
-  range = (buttons.length-1) * gap;
-  
-  let offset = -range * .5;
-
-  for (const button of buttons) {
-    panel.add(button);
-    button.position.x = offset;
-    offset += gap;
-  }
-
-  sliderHandle = new Button("");
-  sliderHandle.scale.multiplyScalar(.04);
-
-  const sliderTrack = new Mesh(
-    new CapsuleGeometry(.02, range + gap).rotateZ(Math.PI * .5),
-    new MeshBasicMaterial({ color: 0x333333 }),
-  );
-  sliderTrack.position.set(0, 0, -.1);
-  panel.add(sliderTrack);
-  sliderTrack.add(sliderHandle);
-
-  buttons.push(playButton, resetButton, sliderHandle);
 
   const elementColors = new Map([
     [1, new Color("white")],
@@ -524,6 +367,29 @@ function init() {
     add_clicker(hand1, "left hand");
     add_clicker(hand2, "right hand");
 
+    // grab logic handlers
+    function onSqueezeStart(event: any) {
+      const controller = event.target;
+      if (!grippingControllers.includes(controller)) {
+        grippingControllers.push(controller);
+        grabState.active = false;
+      }
+    }
+
+    function onSqueezeEnd(event: any) {
+      const controller = event.target;
+      const index = grippingControllers.indexOf(controller);
+      if (index >= 0) {
+        grippingControllers.splice(index, 1);
+        grabState.active = false;
+      }
+    }
+
+    controller1.addEventListener('squeezestart', onSqueezeStart);
+    controller1.addEventListener('squeezeend', onSqueezeEnd);
+    controller2.addEventListener('squeezestart', onSqueezeStart);
+    controller2.addEventListener('squeezeend', onSqueezeEnd);
+
     // ray pointers for controllers
     function setupRayPointer(controller: Group) {
       const spaceRef = { current: controller };
@@ -608,18 +474,31 @@ function init() {
   }
 
   // ===== UIKit Setup =====
-  initUIKit();
+  setupXRUI(panelRot, {
+    getFrameSeek: () => frameSeek,
+    getFramePlay: () => framePlay,
+    recenter: () => recenter(),
+  });
+
+
 
   // ==== 🐞 DEBUG GUI ====
   {
+    // check url for debug UI visibility
+    const showDebug = getURLParam('debug') !== null || getURLParam('debug') === 'true';
+
     const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
     const websocketChannel = new MessageChannel();
 
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
     
+    if (!showDebug) {
+      gui.hide();
+    } 
+
     const uikitFolder = gui.addFolder("UIKit Debug");
     uikitFolder.add({ showInDesktop: showPanelInDesktop }, "showInDesktop").name("Show Panel in Desktop").onChange((value: boolean) => {
-      showPanelInDesktop = value;
+      setShowPanelInDesktop(value);
     });
     uikitFolder.open();
 
@@ -958,208 +837,19 @@ function init() {
     });
 
     // qr scanner setup
-    const qrFolder = gui.addFolder("QR Code Scanner");
-    const qrState = {
-      enabled: false,
-      lastResult: "No QR detected yet",
-    };
-
-    let qrVideo: HTMLVideoElement | null = null;
-    let qrCanvas: HTMLCanvasElement | null = null;
-    let qrContext: CanvasRenderingContext2D | null = null;
-    let qrOverlay: HTMLDivElement | null = null;
-    let qrStream: MediaStream | null = null;
-    let isScanningQR = false;
-    let detectedUrl = "";
-
-    qrFolder.add(qrState, "lastResult").name("Result").listen();
-    
-    const loadScannedFile = async () => {
-      if (!detectedUrl) return;
-      console.log("Processing scanned URL:", detectedUrl);
-      
-      try {
-        loadButtonController.name("Downloading...");
-        
-        // github url parcer to avoid cors issues
-        let fetchUrl = detectedUrl;
-        const githubRegex = /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/;
-        const match = detectedUrl.match(githubRegex);
-        
-        if (match) {
-          fetchUrl = `https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}`;
-          console.log("Converted GitHub URL to:", fetchUrl);
-        }
-        
-        let arrayBuffer: ArrayBuffer | null = null;
-
-        try {
-          const response = await fetch(fetchUrl);
-          if (!response.ok) throw new Error("Status: " + response.status);
-          arrayBuffer = await response.arrayBuffer();
-        } catch (err) {
-          console.warn("Direct fetch failed", err);
-          
-        }
-        
-        if (!arrayBuffer) throw new Error("Empty response");
-
-        const filename = detectedUrl.split('/').pop()?.split('?')[0] || "scanned_file.traj";
-        
+    setupQRScanner(gui, (arrayBuffer, filename) => {
         // clear existing trajectories
         for (const { renderer } of pairs) {
-          renderer.removeFromParent();
+            renderer.removeFromParent();
         }
         pairs.length = 0;
-        
+
         // send to loader worker
         trajLoaderChannel.port1.postMessage({
-          arrayBuffer: arrayBuffer,
-          filename: filename
+            arrayBuffer: arrayBuffer,
+            filename: filename
         }, [arrayBuffer]);
-        
-        loadButtonController.name("Loaded!");
-        setTimeout(() => loadButtonController.name("Load Scanned URL"), 2000);
-        
-        
-        qrState.enabled = false;
-        enableController.updateDisplay();
-        stopQRScanner();
-        
-      } catch (err) {
-        console.error("Failed to load file from QR:", err);
-        loadButtonController.name("Failed (See Console)");
-        setTimeout(() => loadButtonController.name("Load Scanned URL"), 3000);
-      }
-    };
-
-    const loadButtonController = qrFolder.add({ load: loadScannedFile }, "load").name("Load Scanned URL").disable();
-    const enableController = qrFolder.add(qrState, "enabled").name("Enable Scanner").onChange((enabled: boolean) => {
-      if (enabled) {
-        startQRScanner();
-      } else {
-        stopQRScanner();
-      }
     });
-
-    function drawQRLine(begin: {x: number, y: number}, end: {x: number, y: number}, color: string) {
-      if (!qrContext) return;
-      qrContext.beginPath();
-      qrContext.moveTo(begin.x, begin.y);
-      qrContext.lineTo(end.x, end.y);
-      qrContext.lineWidth = 4;
-      qrContext.strokeStyle = color;
-      qrContext.stroke();
-    }
-
-    async function startQRScanner() {
-      // simple overlay setup
-      if (!qrOverlay) {
-        qrOverlay = document.createElement("div");
-        qrOverlay.style.position = "fixed";
-        qrOverlay.style.bottom = "20px";
-        qrOverlay.style.right = "20px";
-        qrOverlay.style.width = "320px";
-        qrOverlay.style.height = "240px";
-        qrOverlay.style.backgroundColor = "black";
-        qrOverlay.style.border = "2px solid white";
-        qrOverlay.style.zIndex = "1000";
-        qrOverlay.style.borderRadius = "8px";
-        qrOverlay.style.overflow = "hidden";
-        document.body.appendChild(qrOverlay);
-      } else {
-        qrOverlay.style.display = "block";
-      }
-
-      if (!qrVideo) {
-        qrVideo = document.createElement("video");
-        qrVideo.style.width = "100%";
-        qrVideo.style.height = "100%";
-        qrVideo.style.objectFit = "cover";
-        qrOverlay.appendChild(qrVideo);
-      }
-
-      if (!qrCanvas) {
-        qrCanvas = document.createElement("canvas");
-        qrCanvas.style.position = "absolute";
-        qrCanvas.style.top = "0";
-        qrCanvas.style.left = "0";
-        qrCanvas.style.width = "100%";
-        qrCanvas.style.height = "100%";
-        qrOverlay.appendChild(qrCanvas);
-        qrContext = qrCanvas.getContext("2d");
-      }
-
-      try {
-        qrStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        if (qrVideo) {
-          qrVideo.srcObject = qrStream;
-          qrVideo.setAttribute("playsinline", "true");
-          qrVideo.play();
-          isScanningQR = true;
-          requestAnimationFrame(qrTick);
-        }
-      } catch (err) {
-        console.error("Error accessing camera for QR scan:", err);
-        qrState.enabled = false;
-        qrState.lastResult = "Camera Error";
-        enableController.updateDisplay();
-      }
-    }
-
-    function qrTick() {
-      if (!isScanningQR || !qrVideo || !qrCanvas || !qrContext) return;
-
-      if (qrVideo.readyState === qrVideo.HAVE_ENOUGH_DATA) {
-        qrCanvas.height = qrVideo.videoHeight;
-        qrCanvas.width = qrVideo.videoWidth;
-        
-        qrContext.drawImage(qrVideo, 0, 0, qrCanvas.width, qrCanvas.height);
-        
-        const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-        
-      
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: "dontInvert",
-        });
-
-        if (code) {
-        
-          drawQRLine(code.location.topLeftCorner, code.location.topRightCorner, "#FF3B58");
-          drawQRLine(code.location.topRightCorner, code.location.bottomRightCorner, "#FF3B58");
-          drawQRLine(code.location.bottomRightCorner, code.location.bottomLeftCorner, "#FF3B58");
-          drawQRLine(code.location.bottomLeftCorner, code.location.topLeftCorner, "#FF3B58");
-
-          
-          if (qrState.lastResult !== code.data) {
-             qrState.lastResult = code.data;
-             
-             
-             if (code.data.startsWith("http://") || code.data.startsWith("https://")) {
-                detectedUrl = code.data;
-                loadButtonController.enable();
-             } else {
-                detectedUrl = "";
-                loadButtonController.disable();
-             }
-          }
-        }
-      }
-
-      requestAnimationFrame(qrTick);
-    }
-
-    function stopQRScanner() {
-      isScanningQR = false;
-      if (qrStream) {
-        qrStream.getTracks().forEach(track => track.stop());
-        qrStream = null;
-      }
-      if (qrOverlay) {
-        qrOverlay.style.display = "none";
-      }
-      loadButtonController.disable();
-    }
 
     loadTrajectories(trajpaths[2].paths);
   }
@@ -1198,9 +888,6 @@ function animate() {
 
   frameSeek.max(max);
 
-  const u = frameSeek.getValue() / max;
-  sliderHandle.position.set(range * (u - .5), 0, 0);
-
   if (framePlay.getValue()) {
     frameTimer += dt;
     if (frameTimer > 1/30) {
@@ -1217,17 +904,14 @@ function animate() {
 
   stats.begin()
 
-  // Update UIKit control panel
-  if (controlPanel) {
-    controlPanel.update(dt * 1000);
-    
-    if (uikitSlider && max > 1) {
-      uikitSlider.setProperties({ 
-        max: max - 1,
-        value: frameSeek.getValue() 
-      } as any);
-    }
-  }
+updateXRUI(
+    dt,
+    renderer.xr.isPresenting,
+    renderer.xr.isPresenting ? renderer.xr.getCamera() : camera, 
+    panelRot,
+    frameSeek.getValue(),
+    max
+);
 
   if (!renderer.xr.isPresenting && resizeRendererToDisplaySize(renderer)) {
     const canvas = renderer.domElement
@@ -1240,32 +924,44 @@ function animate() {
   renderer.render(scene, camera)
   stats.end()
 
-  panel.visible = false;
-  if (controlPanel) {
-    controlPanel.visible = renderer.xr.isPresenting || showPanelInDesktop;
-  }
-
   // panel positioning
   if (renderer.xr.isPresenting) {
-    const camera = renderer.xr.getCamera();
-    panelRot.position.copy(camera.position);
-    panelRot.position.y -= 0.6;
-
-    const forward = new Vector3();
-    camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
-    panelRot.position.addScaledVector(forward, 0.8); 
-    
-    panelRot.lookAt(camera.position);
-    if (controlPanel) {
-      controlPanel.rotation.x = Math.PI * 0.15;
-    }
-
     ui_hover(renderer.xr.getController(0));
     ui_hover(renderer.xr.getController(1));
     ui_hover(renderer.xr.getHand(0));
     ui_hover(renderer.xr.getHand(1));
+
+ if (grippingControllers.length >= 2) {
+      const c1 = grippingControllers[0];
+      const c2 = grippingControllers[1];
+      const p1 = c1.getWorldPosition(new Vector3());
+      const p2 = c2.getWorldPosition(new Vector3());
+      
+      const currDist = p1.distanceTo(p2);
+      const currCenter = p1.clone().lerp(p2, 0.5);
+
+      if (grabState.active) {
+        // NewPos = Center + (OldPos - PrevCenter) * Ratio
+        
+        const ratio = currDist / grabState.prevDist;
+        const delta = currCenter.clone().sub(grabState.prevCenter);
+        objects.position.add(delta);
+
+        const dir = objects.position.clone().sub(currCenter);
+        objects.position.copy(currCenter).add(dir.multiplyScalar(ratio));
+        objects.scale.multiplyScalar(ratio);
+
+      } else {
+        grabState.active = true;
+      }
+
+      grabState.prevDist = currDist;
+      grabState.prevCenter.copy(currCenter);
+      grabState.count = 2;
+
+    } else {
+      grabState.active = false;
+    }
 
     // xr ray pointers update
     for (const { pointer, rayLine } of xrPointers) {
@@ -1284,25 +980,13 @@ function animate() {
       rayLine.visible = false;
     }
     
-    if (showPanelInDesktop && controlPanel) {
-    // Position panel in front of desktop camera for debugging
-    panelRot.position.copy(camera.position);
-    const forward = new Vector3();
-    camera.getWorldDirection(forward);
-    panelRot.position.addScaledVector(forward, 2);
-    panelRot.lookAt(camera.position);
-    if (controlPanel) {
-      controlPanel.rotation.x = 0;
+    if (renderer.xr.isPresenting && calibAnchor) {
+      const frame = renderer.xr.getFrame();
+      const pose = frame.getPose(calibAnchor.anchorSpace, renderer.xr.getReferenceSpace()!)!;
+      
+      calibratedSpace.position.copy(pose.transform.position);
+      calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
+      calibratedSpace.scale.x = -1;
     }
   }
-
-  if (renderer.xr.isPresenting && calibAnchor) {
-    const frame = renderer.xr.getFrame();
-    const pose = frame.getPose(calibAnchor.anchorSpace, renderer.xr.getReferenceSpace()!)!;
-    
-    calibratedSpace.position.copy(pose.transform.position);
-    calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
-    calibratedSpace.scale.x = -1;
-  }
-}
 }
