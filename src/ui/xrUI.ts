@@ -29,10 +29,10 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     //  root container control panel
     controlPanel = new Container({
         sizeX: 0.9,
-        sizeY: 0.35,
+        sizeY: 0.33,
         flexDirection: "column",
         backgroundColor: 0x1a1a1a,
-        padding: 2,
+        padding: 5,
         gap: 5,
         borderRadius: 2,
     });
@@ -44,6 +44,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     const buttonRow = new Container({
         flexDirection: "row",
         gap: 3,
+        marginBottom: 2,
         justifyContent: "center",
         alignItems: "center",
     });
@@ -135,6 +136,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     if (uikitSlider.thumb) {
         uikitSlider.thumb.setProperties({
             borderColor: 0x888888,
+            borderWidth: 1,
             height: 12,
             width: 12,
             transformTranslateX: -6,
