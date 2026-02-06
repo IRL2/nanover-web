@@ -44,3 +44,25 @@ h1 {
   font-size: 3.2em;
   line-height: 1.1;
 }
+
+#info-panel {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  min-width: 200px;
+  min-height: 80px;
+  padding: 16px 20px;
+  background: linear-gradient(#0a1628, #0a1628) padding-box,
+              linear-gradient(135deg, #3b82f6 0%, #ffffff 100%) border-box;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+}
+
+#trajectory-name {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 14px;
+  color: #e0e0e0;
+}

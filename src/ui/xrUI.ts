@@ -44,7 +44,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     const buttonRow = new Container({
         flexDirection: "row",
         gap: 3,
-        marginBottom: 2,
+        marginBottom: 4,
         justifyContent: "center",
         alignItems: "center",
     });

@@ -70,6 +70,13 @@ let framePlay: Controller;
 let frameTimer = 0.0;
 let panelRot: Object3D;
 let recenter = () => {};
+let trajectoryNameElement: HTMLElement | null;
+
+function updateTrajectoryName(name: string) {
+  if (trajectoryNameElement) {
+    trajectoryNameElement.textContent = name || 'No trajectory loaded';
+  }
+}
 
 let xrPointers: { pointer: Pointer, controller: Group, rayLine: Mesh }[] = [];
 
@@ -133,6 +140,7 @@ function init() {
   // ===== 🖼️ CANVAS, RENDERER, & SCENE =====
   {
     canvas = document.querySelector(`canvas#${CANVAS_ID}`)!
+    trajectoryNameElement = document.getElementById('trajectory-name')
     renderer = new WebGLRenderer({ canvas, antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     scene = new Scene()
@@ -467,8 +475,11 @@ function init() {
 
   // ===== 📈 STATS & CLOCK =====
   {
+    const debugMode = getURLParam('debug') !== null;
     stats = new Stats()
-    document.body.appendChild(stats.dom)
+    if (debugMode) {
+      document.body.appendChild(stats.dom)
+    }
 
     document.body.appendChild(XRButton.createButton(renderer, { optionalFeatures: ["anchors", "hand-tracking"] }));
   }
@@ -677,11 +688,13 @@ function init() {
       { name: "Nanotube", paths: ["webtraj.msgpack"] },
     ];
 
-    function loadTrajectories(paths: string[]) {
+    function loadTrajectories(paths: string[], displayName?: string) {
       for (const { renderer } of pairs) {
         renderer.removeFromParent();
       }
       pairs.length = 0;
+
+      updateTrajectoryName(displayName || paths.join(', '));
 
       for (let path of paths) {
         path = new URL("./data/" + path, window.location.href).toString();
@@ -709,7 +722,7 @@ function init() {
 
     const trajectoryFolder = gui.addFolder("Trajectories");
     for (const { name, paths } of trajpaths) {
-      trajectoryFolder.add({ load: () => loadTrajectories(paths) }, "load").name(name);
+      trajectoryFolder.add({ load: () => loadTrajectories(paths, name) }, "load").name(name);
     }
 
     frameSeek = trajectoryFolder.add({ frame: 0 }, "frame", 0, 1, 1).name("Frame");
@@ -799,6 +812,7 @@ function init() {
       const fileNames = files.map((f: any) => f.driveData.name).join(', ');
       pickerStates.selectedFiles = fileNames || 'No files';
       filesController.updateDisplay();
+      updateTrajectoryName(fileNames);
 
       // clear existing trajectories
 
@@ -843,6 +857,7 @@ function init() {
             renderer.removeFromParent();
         }
         pairs.length = 0;
+        updateTrajectoryName(filename);
 
         // send to loader worker
         trajLoaderChannel.port1.postMessage({
@@ -851,7 +866,49 @@ function init() {
         }, [arrayBuffer]);
     });
 
-    loadTrajectories(trajpaths[2].paths);
+    // load trajectory from URL query parameter
+    const trajUrl = getURLParam('traj');
+    if (trajUrl) {
+      loadTrajectoryFromUrl(trajUrl);
+    } else {
+      loadTrajectories(trajpaths[2].paths, trajpaths[2].name);
+    }
+
+    async function loadTrajectoryFromUrl(url: string) {
+      try {
+        updateTrajectoryName('Loading...');
+
+        // convert github blob URLs to raw
+        let fetchUrl = url;
+        const githubRegex = /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/(.+)$/;
+        const match = url.match(githubRegex);
+        if (match) {
+          fetchUrl = `https://raw.githubusercontent.com/${match[1]}/${match[2]}/${match[3]}`;
+        }
+
+        const response = await fetch(fetchUrl);
+        if (!response.ok) throw new Error('Failed to fetch: ' + response.status);
+        const arrayBuffer = await response.arrayBuffer();
+
+        const filename = url.split('/').pop()?.split('?')[0] || 'url_trajectory.msgpack';
+
+        // clear existing trajectories
+        for (const { renderer } of pairs) {
+          renderer.removeFromParent();
+        }
+        pairs.length = 0;
+        updateTrajectoryName(filename);
+
+        trajLoaderChannel.port1.postMessage({
+          arrayBuffer: arrayBuffer,
+          filename: filename
+        }, [arrayBuffer]);
+
+      } catch (err) {
+        console.error('Failed to load trajectory from URL:', err);
+        updateTrajectoryName('Failed to load');
+      }
+    }
   }
 }
 
