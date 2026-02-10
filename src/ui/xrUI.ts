@@ -1,6 +1,6 @@
 import { Container, Text as UIText } from '@pmndrs/uikit';
 import { Slider } from '@pmndrs/uikit-default';
-import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion, Euler } from 'three';
+import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion } from 'three';
 import { Controller } from 'lil-gui';
 
 export interface UIKitButton {
