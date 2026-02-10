@@ -1,6 +1,6 @@
 import { Container, Text as UIText } from '@pmndrs/uikit';
 import { Slider } from '@pmndrs/uikit-default';
-import { Object3D, Vector3, PerspectiveCamera } from 'three';
+import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion, Euler } from 'three';
 import { Controller } from 'lil-gui';
 
 export interface UIKitButton {
@@ -14,9 +14,94 @@ export const uikitButtons: UIKitButton[] = [];
 let playButtonText: UIText | undefined;
 export let uikitSlider: Slider | undefined;
 export let showPanelInDesktop = false;
+export let grabHandle: Container | undefined;
+
+// panel grab state
+let isPanelGrabbed = false;
+let hasBeenPlaced = false;
+let initialPositionSet = false;
+let grabbingController: Group | null = null;
+
+// matrices for calculation
+const offsetMatrix = new Matrix4();
+const panelWorldMatrix = new Matrix4();
+const controllerWorldMatrix = new Matrix4();
+const inverseControllerMatrix = new Matrix4();
+
+const targetPos = new Vector3();
+const targetRot = new Quaternion();
+const targetScale = new Vector3();
+const forward = new Vector3();
+const yAxis = new Vector3(0, 1, 0);
+const xAxis = new Vector3();
+
+const panelPos = new Vector3();
+const camPos = new Vector3();
 
 export function setShowPanelInDesktop(value: boolean) {
     showPanelInDesktop = value;
+}
+
+export function isPanelBeingGrabbed(): boolean {
+    return isPanelGrabbed;
+}
+
+export function getGrabHandle(): Container | undefined {
+    return grabHandle;
+}
+
+export function startPanelGrab(controller: Group, panelRot: Object3D) {
+    if (isPanelGrabbed) return;
+
+    isPanelGrabbed = true;
+    grabbingController = controller;
+
+    panelRot.updateMatrixWorld(true);
+    controller.updateMatrixWorld(true);
+
+    panelWorldMatrix.copy(panelRot.matrixWorld);
+    controllerWorldMatrix.copy(controller.matrixWorld);
+    inverseControllerMatrix.copy(controllerWorldMatrix).invert();
+
+    offsetMatrix.multiplyMatrices(inverseControllerMatrix, panelWorldMatrix);
+
+    grabHandle?.setProperties({ backgroundColor: 0x4488ff });
+}
+
+export function endPanelGrab() {
+    isPanelGrabbed = false;
+    grabbingController = null;
+    hasBeenPlaced = true;
+
+    grabHandle?.setProperties({ backgroundColor: 0x888888 });
+}
+
+export function resetPanelPlacement() {
+    hasBeenPlaced = false;
+    initialPositionSet = false;
+}
+
+export function updatePanelGrab(panelRot: Object3D) {
+    if (!isPanelGrabbed || !grabbingController) return;
+
+    grabbingController.updateMatrixWorld(true);
+    panelWorldMatrix.multiplyMatrices(grabbingController.matrixWorld, offsetMatrix);
+    if (panelRot.parent) {
+        const parentInverse = new Matrix4().copy(panelRot.parent.matrixWorld).invert();
+        panelWorldMatrix.premultiply(parentInverse);
+    }
+    panelWorldMatrix.decompose(targetPos, targetRot, targetScale);
+    panelRot.position.copy(targetPos);
+    forward.set(0, 0, 1).applyQuaternion(targetRot);
+    forward.y = 0;
+    forward.normalize();
+    
+    if (forward.lengthSq() > 0.001) {
+        xAxis.crossVectors(yAxis, forward).normalize();
+        const m = new Matrix4().makeBasis(xAxis, yAxis, forward);
+        panelRot.quaternion.setFromRotationMatrix(m);
+    }
+    panelRot.scale.copy(targetScale);
 }
 
 export interface XRUIContext {
@@ -26,21 +111,29 @@ export interface XRUIContext {
 }
 
 export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
-    //  root container control panel
+// transparent root container 
     controlPanel = new Container({
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: undefined,
+        gap: 5,
+    });
+
+    controlPanel.position.set(0, 0, 0);
+    panelRot.add(controlPanel);
+
+    const uiContainer = new Container({
         sizeX: 0.9,
         sizeY: 0.33,
         flexDirection: "column",
         backgroundColor: 0x1a1a1a,
         padding: 5,
         gap: 5,
-        borderRadius: 2,
+        borderRadius: 4,
     });
+    controlPanel.add(uiContainer);
 
-    controlPanel.position.set(0, 0, 0);
-    panelRot.add(controlPanel);
-
-    // button container (horizontal row)
     const buttonRow = new Container({
         flexDirection: "row",
         gap: 3,
@@ -49,7 +142,6 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         alignItems: "center",
     });
 
-    // custom button container
     function createUIButton(label: string, color: number, onClick: () => void) {
         const btn = new Container({
             width: 20,
@@ -113,7 +205,6 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
 
     buttonRow.add(prevBtn, playBtn, nextBtn, resetBtn, centerBtn);
 
-    // UIKit default Slider component
     uikitSlider = new Slider();
     uikitSlider.setProperties({
         width: "100%",
@@ -150,16 +241,50 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         } as any);
     }
 
-    controlPanel.add(buttonRow, uikitSlider);
+    uiContainer.add(buttonRow, uikitSlider);
+
+    grabHandle = new Container({
+        width: 15,
+        height: 3,
+        backgroundColor: 0x888888,
+        borderRadius: 2,
+        cursor: "grab",
+        pointerEvents: "auto",
+    });
+
+    grabHandle.addEventListener('pointerenter', () => {
+        grabHandle?.setProperties({ backgroundColor: 0xaaaaaa });
+    });
+    grabHandle.addEventListener('pointerleave', () => {
+        if (!isPanelGrabbed) {
+            grabHandle?.setProperties({ backgroundColor: 0x888888 });
+        }
+    });
+    
+    grabHandle.addEventListener('pointerdown', (e) => {
+        (grabHandle as any).userData.grabRequested = true;
+        (grabHandle as any).userData.pointerId = e.pointerId; 
+    });
+
+    grabHandle.addEventListener('pointerup', () => {
+        endPanelGrab();
+        (grabHandle as any).userData.grabRequested = false;
+    });
+
+    controlPanel.add(grabHandle);
 }
 
+/**
+ * @param controllers - (renderer.xr.getController(0), etc)
+ */
 export function updateXRUI(
     dt: number,
     isPresenting: boolean,
     camera: PerspectiveCamera,
     panelRot: Object3D,
     frameSeekValue: number,
-    maxFrames: number
+    maxFrames: number,
+    controllers: Group[] = [] 
 ) {
     if (controlPanel) {
         controlPanel.update(dt * 1000);
@@ -174,24 +299,69 @@ export function updateXRUI(
         controlPanel.visible = isPresenting || showPanelInDesktop;
     }
 
-    // panel positioning
+    
+    if (grabHandle && (grabHandle as any).userData.grabRequested && !isPanelGrabbed) {
+        let closestController = null;
+        let minDistance = Infinity;
+        const handlePos = new Vector3();
+        grabHandle.getWorldPosition(handlePos);
+
+        for (const c of controllers) {
+            const cPos = new Vector3();
+            c.getWorldPosition(cPos);
+            const dist = cPos.distanceTo(handlePos);
+            if (dist < 0.2) {
+                 if (dist < minDistance) {
+                     minDistance = dist;
+                     closestController = c;
+                 }
+            }
+        }
+
+        if (closestController) {
+            startPanelGrab(closestController, panelRot);
+            (grabHandle as any).userData.grabRequested = false;
+        }
+    }
+
+    if (isPanelGrabbed && grabbingController) {
+        updatePanelGrab(panelRot);
+    }
+
+    if ((isPresenting || showPanelInDesktop) && controlPanel && panelRot) {
+        panelRot.getWorldPosition(panelPos);
+        camera.getWorldPosition(camPos);
+
+        const deltaY = camPos.y - panelPos.y;
+        const distXZ = Math.hypot(camPos.x - panelPos.x, camPos.z - panelPos.z);
+        const tiltAngle = -Math.atan2(deltaY, distXZ);
+
+        controlPanel.rotation.x = tiltAngle;
+    }
+
+    if ((isPresenting && (hasBeenPlaced || isPanelGrabbed))) {
+        return;
+    }
+
     if (isPresenting) {
-        panelRot.position.copy(camera.position);
-        panelRot.position.y -= 0.6;
+        if (!initialPositionSet) {
+            panelRot.position.copy(camera.position);
+            panelRot.position.y -= 0.6;
 
-        const forward = new Vector3();
-        camera.getWorldDirection(forward);
-        forward.y = 0;
-        forward.normalize();
-        panelRot.position.addScaledVector(forward, 0.8);
+            const forward = new Vector3();
+            camera.getWorldDirection(forward);
+            forward.y = 0;
+            forward.normalize();
+            panelRot.position.addScaledVector(forward, 0.8);
 
-        panelRot.lookAt(camera.position);
-        if (controlPanel) {
-            controlPanel.rotation.x = Math.PI * 0.15;
+            const targetLook = camera.position.clone();
+            targetLook.y = panelRot.position.y;
+            panelRot.lookAt(targetLook);
+
+            initialPositionSet = true;
         }
     } else {
         if (showPanelInDesktop && controlPanel) {
-
             panelRot.position.copy(camera.position);
             const forward = new Vector3();
             camera.getWorldDirection(forward);

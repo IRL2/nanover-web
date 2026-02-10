@@ -49,7 +49,8 @@ import { GDrivePicker } from './helpers/gdrive-picker';
 import { reversePainterSortStable } from '@pmndrs/uikit';
 import { createRayPointer, Pointer } from '@pmndrs/pointer-events';
 
-import { setupXRUI, updateXRUI, uikitButtons, setShowPanelInDesktop, showPanelInDesktop } from './ui/xrUI';
+import { setupXRUI, updateXRUI, uikitButtons, setShowPanelInDesktop, showPanelInDesktop, getGrabHandle, startPanelGrab, endPanelGrab, isPanelBeingGrabbed, resetPanelPlacement } from './ui/xrUI';
+import { setupWebUI, updateWebUI } from './ui/webUI';
 import { setupQRScanner } from './helpers/qrReader';
 
 declare const gapi: any;
@@ -159,6 +160,8 @@ function init() {
       const session = renderer.xr.getSession()!;
       console.log(session.enabledFeatures);
       session.addEventListener('select', onSelect);
+
+      resetPanelPlacement();
 
       setTimeout(() => {
         recenter();
@@ -459,11 +462,27 @@ function init() {
       // button press
       controller.addEventListener('selectstart' as any, () => {
         pointer.down({ timeStamp: performance.now(), button: 0 });
+        
+        const intersection = pointer.getIntersection();
+        const handle = getGrabHandle();
+        if (handle && intersection?.object) {
+          let obj = intersection.object;
+          while (obj) {
+            if (obj === handle || (handle as any).interactionPanel === obj) {
+              startPanelGrab(controller, panelRot);
+              break;
+            }
+            obj = obj.parent as any;
+          }
+        }
       });
 
       //button release
       controller.addEventListener('selectend' as any, () => {
         pointer.up({ timeStamp: performance.now(), button: 0 });
+        if (isPanelBeingGrabbed()) {
+          endPanelGrab();
+        }
       });
 
       xrPointers.push({ pointer, controller, rayLine: rayMesh });
@@ -491,6 +510,12 @@ function init() {
     recenter: () => recenter(),
   });
 
+  // ===== Web UI (HTML panel) =====
+  setupWebUI({
+    getFrameSeek: () => frameSeek,
+    getFramePlay: () => framePlay,
+    updateTrajectoryName: (name: string) => updateTrajectoryName(name),
+  });
 
 
   // ==== 🐞 DEBUG GUI ====
@@ -969,6 +994,8 @@ updateXRUI(
     frameSeek.getValue(),
     max
 );
+
+  updateWebUI(frameSeek.getValue(), max);
 
   if (!renderer.xr.isPresenting && resizeRendererToDisplaySize(renderer)) {
     const canvas = renderer.domElement

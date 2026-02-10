@@ -8,8 +8,25 @@
   </head>
   <body>
     <canvas id="scene"></canvas>
-    <div id="info-panel">
-      <span id="trajectory-name">No trajectory loaded</span>
+
+    <div id="control-panel">
+      <div id="tab-bar">
+        <button class="tab-btn active" data-tab="simulation">Recording</button>
+        <button class="tab-btn" data-tab="info">Info</button>
+      </div>
+
+      <div class="tab-content active" id="tab-simulation">
+        <button id="btn-play-pause" class="panel-btn primary">Play / Pause</button>
+        <input id="seek-slider" type="range" min="0" max="1" value="0" step="1" />
+        <div id="sim-info">
+          <span id="trajectory-name">No trajectory loaded</span>
+        </div>
+      </div>
+
+      <div class="tab-content" id="tab-info">
+        <h2 id="info-title">NanoVer WebXR player</h2>
+        <a id="info-link" href="https://www.intangiblerealitieslab.org/" target="_blank" rel="noopener noreferrer">theirl.org</a>
+      </div>
     </div>
     <script type="module" src="/src/scene.ts"></script>
   </body>
