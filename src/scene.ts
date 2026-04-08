@@ -124,9 +124,15 @@ let calibAnchor: XRAnchor | undefined;
 
 let calibratedSpace = new Object3D();
 
-const avatars = new InstancedMesh(new BoxGeometry(), new MeshLambertMaterial(), 64);
-avatars.boundingSphere = new Sphere(new Vector3(), 100);
-avatars.count = 0;
+
+const avatarHeadsets = new InstancedMesh(new BoxGeometry(), new MeshLambertMaterial(), 64);
+avatarHeadsets.boundingSphere = new Sphere(new Vector3(), 100);
+avatarHeadsets.count = 0;
+
+const avatarHands = new InstancedMesh(new BoxGeometry(0.08, 0.08, 0.08), new MeshLambertMaterial(), 128);
+avatarHands.boundingSphere = new Sphere(new Vector3(), 100);
+avatarHands.count = 0;
+
 const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial({ color: "green" }), 64);
 interactions.boundingSphere = new Sphere(new Vector3(), 100);
 interactions.count = 0;
@@ -175,16 +181,12 @@ function init() {
     function onSelect(event: XRInputSourceEvent) {
       let frame = event.frame;
 
-      // skip calib
-      return;
-      // if (session.enabledFeatures?.includes("anchors")) return;
+      const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
 
       const clickPose = event.frame.getPose(
         event.inputSource.targetRaySpace,
         renderer.xr.getReferenceSpace()!,
       )!;
-
-      const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
 
       const next = new Mesh(
         new CylinderGeometry(),
@@ -238,14 +240,15 @@ function init() {
 
   const loader = new OBJLoader();
   loader.load(new URL("./data/circlet.obj", window.location.href).toString(), (data) => {
-    avatars.geometry = (data.children[0] as any).geometry;
-    avatars.geometry.rotateX(-Math.PI * .5);
+    avatarHeadsets.geometry = (data.children[0] as any).geometry;
+    avatarHeadsets.geometry.rotateX(-Math.PI * .5);
   });
 
   // ===== 📦 OBJECTS =====
   {
     scene.add(calibratedSpace);
-    calibratedSpace.add(avatars);
+    calibratedSpace.add(avatarHeadsets);
+    calibratedSpace.add(avatarHands);
     objects = new Object3D();
     calibratedSpace.add(objects);
     live = new NaiveRenderer();
@@ -525,6 +528,8 @@ function init() {
 
     const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
     const websocketChannel = new MessageChannel();
+    
+    websocketWorker.postMessage({ port: websocketChannel.port2 }, { transfer: [websocketChannel.port2] });
 
     gui = new GUI({ title: '🐞 Debug GUI', width: 300 })
     
@@ -539,7 +544,7 @@ function init() {
     uikitFolder.open();
 
     function connect(host: string) {
-      websocketWorker.postMessage({ port: websocketChannel.port2, host }, { transfer: [websocketChannel.port2] });
+      websocketWorker.postMessage({ host });
     }
 
     const boxMesh = new Mesh(
@@ -559,6 +564,8 @@ function init() {
     const c2 = new Color();
 
     const texts: Set<Text> = new Set();
+
+    const sharedState: { [key: string]: any } = {};
 
     websocketChannel.port1.addEventListener("message", (event) => {
       const { frame, command } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
@@ -595,6 +602,7 @@ function init() {
       }
 
       if (frame?.box) {
+        // console.log("Box data received:", frame.box);
         // @ts-ignore
         const m = new Matrix3(...frame.box);
         const x = new Vector3();
@@ -609,18 +617,36 @@ function init() {
         boxMesh.visible = true;
 
         boxWire.geometry = new WireframeGeometry(boxMesh.geometry);
+      } else {
 
-        // objects.position.set(0, 1, 0);
-        // const test = new Vector3();
-        // boxMesh.getWorldPosition(test);
-        // objects.position.sub(scale.multiplyScalar(objects.scale.x));
-        // objects.position.sub(test).y += 1;
+        if (sharedState["system.box.vectors"]) {
+          console.log("Box from state:", sharedState["system.box.vectors"]);
+        }
       }
 
       if (frame?.state) {
-        avatars.count = 0;
-        avatars.instanceMatrix.needsUpdate = true;
-        if (avatars.instanceColor) avatars.instanceColor.needsUpdate = true;
+        const stateData = frame.state as { updates?: { [key: string]: any }, removals?: string[] };
+        
+        if (stateData.updates) {
+          for (const [key, value] of Object.entries(stateData.updates)) {
+            sharedState[key] = value;
+          }
+        }
+
+        if (stateData.removals) {
+          for (const key of stateData.removals) {
+            delete sharedState[key];
+          }
+        }
+
+        // console.log("Shared state keys:", Object.keys(sharedState));
+
+        avatarHeadsets.count = 0;
+        avatarHeadsets.instanceMatrix.needsUpdate = true;
+        if (avatarHeadsets.instanceColor) avatarHeadsets.instanceColor.needsUpdate = true;
+        avatarHands.count = 0;
+        avatarHands.instanceMatrix.needsUpdate = true;
+        if (avatarHands.instanceColor) avatarHands.instanceColor.needsUpdate = true;
         interactions.count = 0;
         interactions.instanceMatrix.needsUpdate = true;
 
@@ -630,10 +656,11 @@ function init() {
         }
         texts.clear();
 
-        if (frame.state.scene) {
-          t.fromArray(frame.state.scene, 0);
-          r.fromArray(frame.state.scene, 3);
-          s.fromArray(frame.state.scene, 7);
+        if (sharedState.scene) {
+          console.log("Scene state:", sharedState.scene);
+          t.fromArray(sharedState.scene, 0);
+          r.fromArray(sharedState.scene, 3);
+          s.fromArray(sharedState.scene, 7);
           s.x *= -1;
 
           objects.position.copy(t);
@@ -645,7 +672,7 @@ function init() {
           cameraControls.update();
         }
 
-        for (const [key, value] of Object.entries(frame?.state)) {
+        for (const [key, value] of Object.entries(sharedState)) {
           if (key.startsWith("interaction.") && frame.positions) {
             t.fromArray(frame.positions, (value as any).particles[0] * 3);
             r.identity();
@@ -656,33 +683,40 @@ function init() {
           }
 
           if (key.startsWith("avatar.")) {
+            console.log("Avatar data:", key, value);
             c2.fromArray((value as any).color);
             for (const component of (value as any).components) {
-              // const id = `${key}.${component.name}`;
+              console.log("Avatar component:", component.name, component.position);
               t.fromArray(component.position);
               r.fromArray(component.rotation);
-              s.set(.05, .05, .05);
-              m.compose(t, r, s);
-              avatars.setMatrixAt(avatars.count, m);
-              avatars.setColorAt(avatars.count, c2);
-              avatars.count += 1;
+              
+              if (component.name === "headset") {
+                s.set(.05, .05, .05);
+                m.compose(t, r, s);
+                avatarHeadsets.setMatrixAt(avatarHeadsets.count, m);
+                avatarHeadsets.setColorAt(avatarHeadsets.count, c2);
+                avatarHeadsets.count += 1;
 
-              const myText = new Text();
-              scene.add(myText);
-
-              // Set properties to configure:
-              myText.text = (value as any).name;
-              myText.fontSize = 0.05;
-              myText.position.copy(t).y += 0.1;
-              myText.color = "#" + c2.getHexString();
-              myText.anchorX = "center";
-              myText.anchorY = "bottom";
-              myText.lookAt(camera.position);
-
-              // Update the rendering:
-              myText.sync()
-              texts.add(myText);
+                const myText = new Text();
+                calibratedSpace.add(myText);
+                myText.text = (value as any).name;
+                myText.fontSize = 0.05;
+                myText.position.copy(t).y += 0.1;
+                myText.color = "#" + c2.getHexString();
+                myText.anchorX = "center";
+                myText.anchorY = "bottom";
+                myText.lookAt(camera.position);
+                myText.sync();
+                texts.add(myText);
+              } else if (component.name === "hand.left" || component.name === "hand.right") {
+                s.set(1, 1, 1); 
+                m.compose(t, r, s);
+                avatarHands.setMatrixAt(avatarHands.count, m);
+                avatarHands.setColorAt(avatarHands.count, c2);
+                avatarHands.count += 1;
+              }
             }
+            console.log("Avatar headsets:", avatarHeadsets.count, "hands:", avatarHands.count);
           }
         }
       }
@@ -1059,18 +1093,18 @@ updateXRUI(
         rayLine.scale.z = 0.15; 
       }
     }
-  } else {
-    for (const { rayLine } of xrPointers) {
-      rayLine.visible = false;
-    }
-    
-    if (renderer.xr.isPresenting && calibAnchor) {
+
+    if (calibAnchor) {
       const frame = renderer.xr.getFrame();
       const pose = frame.getPose(calibAnchor.anchorSpace, renderer.xr.getReferenceSpace()!)!;
       
       calibratedSpace.position.copy(pose.transform.position);
       calibratedSpace.rotation.setFromQuaternion(new Quaternion().copy(pose.transform.orientation));
       calibratedSpace.scale.x = -1;
+    }
+  } else {
+    for (const { rayLine } of xrPointers) {
+      rayLine.visible = false;
     }
   }
 }
