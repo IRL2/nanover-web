@@ -90,6 +90,25 @@ const grabState = {
   prevCenter: new Vector3(),
 };
 
+// IMD interaction astate
+interface IMDInteraction {
+  id: string;
+  controller: Group;
+  particles: number[];
+  active: boolean;
+}
+
+const activeInteractions = new Map<Group, IMDInteraction>();
+let interactionIdCounter = 0;
+
+function generateInteractionId(): string {
+  return `web-${Date.now()}-${interactionIdCounter++}`;
+}
+
+let onInteractionStart: ((controller: Group) => void) | null = null;
+let onInteractionUpdate: ((controller: Group) => void) | null = null;
+let onInteractionEnd: ((controller: Group) => void) | null = null;
+
 function getURLParam(param: string): string | null {
   const paramsString = window.location.search;
   const urlParams = new URLSearchParams(paramsString);
@@ -137,6 +156,15 @@ const interactions = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial(
 interactions.boundingSphere = new Sphere(new Vector3(), 100);
 interactions.count = 0;
 
+//interaction lines
+const interactionLines = new Group();
+const interactionLineMaterial = new MeshBasicMaterial({ 
+  color: 0xFFFF00, 
+  transparent: true, 
+  opacity: 0.8,
+  depthTest: false 
+});
+
 const frameClock = new Clock();
 
 const pairs: { traj: TestTrajectory, renderer: NaiveRenderer }[] = [];
@@ -179,6 +207,10 @@ function init() {
     }
 
     function onSelect(event: XRInputSourceEvent) {
+      if (event.inputSource.handedness !== 'left') {
+        return;
+      }
+      
       let frame = event.frame;
 
       const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
@@ -193,7 +225,7 @@ function init() {
         new MeshBasicMaterial({ color: support ? "green" : "red" }),
       );
       next.position.copy(clickPose.transform.position);
-      next.position.y = 0.05;
+      // next.position.y = 0.05;
       next.scale.set(.05, .1, .05);
       scene.add(next);
       calibPoints.push(next);
@@ -228,7 +260,7 @@ function init() {
             new CylinderGeometry(),
             new MeshBasicMaterial({ color: "magenta" }),
           );
-          next.position.y = 0.05;
+          // next.position.y = 0.05;
           next.scale.set(.05, .1, .05);
           calibratedSpace.add(next);
         }, (error) => {
@@ -254,6 +286,7 @@ function init() {
     live = new NaiveRenderer();
     objects.add(live);
     objects.add(interactions);
+    scene.add(interactionLines);
   }
 
   // anchor for the UI Panel
@@ -468,15 +501,22 @@ function init() {
         
         const intersection = pointer.getIntersection();
         const handle = getGrabHandle();
+        let uiInteraction = false;
+        
         if (handle && intersection?.object) {
           let obj = intersection.object;
           while (obj) {
             if (obj === handle || (handle as any).interactionPanel === obj) {
               startPanelGrab(controller, panelRot);
+              uiInteraction = true;
               break;
             }
             obj = obj.parent as any;
           }
+        }
+        
+        if (!uiInteraction && onInteractionStart) {
+          onInteractionStart(controller);
         }
       });
 
@@ -485,6 +525,9 @@ function init() {
         pointer.up({ timeStamp: performance.now(), button: 0 });
         if (isPanelBeingGrabbed()) {
           endPanelGrab();
+        }
+        if (onInteractionEnd) {
+          onInteractionEnd(controller);
         }
       });
 
@@ -545,6 +588,12 @@ function init() {
 
     function connect(host: string) {
       websocketWorker.postMessage({ host });
+      
+      // Hide trajectory playback - server provides live frames instead
+      for (const { renderer } of pairs) {
+        renderer.visible = false;
+      }
+      framePlay.setValue(false);
     }
 
     const boxMesh = new Mesh(
@@ -566,6 +615,167 @@ function init() {
     const texts: Set<Text> = new Set();
 
     const sharedState: { [key: string]: any } = {};
+    
+    // current live frame positions 
+    let currentPositions: Float32Array | null = null;
+
+    // send state update
+    function sendInteractionUpdate(interactionId: string, interaction: {
+      positions: [number, number, number];
+      particles: number[];
+      type?: string;
+      scale?: number;
+      mass_weighted?: boolean;
+    } | null) {
+      const stateUpdate: { updates?: { [key: string]: any }, removals?: string[] } = {};
+      
+      if (interaction === null) {
+        stateUpdate.removals = [`interaction.${interactionId}`];
+      } else {
+
+        stateUpdate.updates = {
+          [`interaction.${interactionId}`]: {
+            position: interaction.positions,
+            particles: interaction.particles,
+            interaction_type: interaction.type ?? "constant",
+            scale: interaction.scale ?? 70,
+            mass_weighted: interaction.mass_weighted ?? true,
+          }
+        };
+      }
+      
+      console.log("Sending interaction update:", JSON.stringify(stateUpdate, null, 2));
+      websocketChannel.port1.postMessage({ state: stateUpdate });
+    }
+
+    // Find the N closest atoms to a world position
+    function findClosestAtoms(worldPos: Vector3, count: number = 1): number[] {
+      if (!currentPositions || currentPositions.length === 0) return [];
+      
+      const atomCount = currentPositions.length / 3;
+      const distances: { index: number; dist: number }[] = [];
+      
+      // Transform world position to simulation space
+      const simPos = worldPos.clone();
+      // Apply inverse of objects transform to get simulation coordinates
+      const invMatrix = new Matrix4().copy(objects.matrixWorld).invert();
+      simPos.applyMatrix4(invMatrix);
+      
+      const atomPos = new Vector3();
+      for (let i = 0; i < atomCount; i++) {
+        atomPos.fromArray(currentPositions, i * 3);
+        const dist = simPos.distanceTo(atomPos);
+        distances.push({ index: i, dist });
+      }
+      
+      distances.sort((a, b) => a.dist - b.dist);
+      return distances.slice(0, count).map(d => d.index);
+    }
+
+    // get world position of an atom
+    function getAtomWorldPosition(atomIndex: number): Vector3 | null {
+      if (!currentPositions || atomIndex * 3 + 2 >= currentPositions.length) return null;
+      
+      const pos = new Vector3().fromArray(currentPositions, atomIndex * 3);
+      // transform to world space
+      pos.applyMatrix4(objects.matrixWorld);
+      return pos;
+    }
+
+    function startInteraction(controller: Group) {
+      if (activeInteractions.has(controller)) return;
+      
+      const controllerPos = controller.getWorldPosition(new Vector3());
+      const particles = findClosestAtoms(controllerPos, 1);
+      
+      if (particles.length === 0) return;
+      
+      const interactionId = generateInteractionId();
+      const interaction: IMDInteraction = {
+        id: interactionId,
+        controller,
+        particles,
+        active: true,
+      };
+      
+      activeInteractions.set(controller, interaction);
+      
+
+      const lineGeom = new CylinderGeometry(0.005, 0.005, 1, 8);
+      lineGeom.rotateX(Math.PI / 2);
+      lineGeom.translate(0, 0, 0.5);
+      const line = new Mesh(lineGeom, interactionLineMaterial.clone());
+      line.userData.interactionId = interactionId;
+      line.renderOrder = 999;
+      interactionLines.add(line);
+      
+      // send initial state
+      const simPos = controllerPos.clone();
+      const invMatrix = new Matrix4().copy(objects.matrixWorld).invert();
+      simPos.applyMatrix4(invMatrix);
+      
+      sendInteractionUpdate(interactionId, {
+        positions: [simPos.x, simPos.y, simPos.z],
+        particles,
+      });
+    }
+
+    // update active interaction
+    function updateInteraction(controller: Group) {
+      const interaction = activeInteractions.get(controller);
+      if (!interaction || !interaction.active) return;
+      
+      const controllerPos = controller.getWorldPosition(new Vector3());
+      
+      // tansform to simulation space
+      const simPos = controllerPos.clone();
+      const invMatrix = new Matrix4().copy(objects.matrixWorld).invert();
+      simPos.applyMatrix4(invMatrix);
+      
+      sendInteractionUpdate(interaction.id, {
+        positions: [simPos.x, simPos.y, simPos.z],
+        particles: interaction.particles,
+      });
+      
+      // update  line
+      const atomPos = getAtomWorldPosition(interaction.particles[0]);
+      if (atomPos) {
+        for (const child of interactionLines.children) {
+          if (child.userData.interactionId === interaction.id) {
+            const line = child as Mesh;
+            line.position.copy(controllerPos);
+            line.lookAt(atomPos);
+            const distance = controllerPos.distanceTo(atomPos);
+            line.scale.set(1, 1, distance);
+          }
+        }
+      }
+    }
+
+    // end an interaction
+    function endInteraction(controller: Group) {
+      const interaction = activeInteractions.get(controller);
+      if (!interaction) return;
+      sendInteractionUpdate(interaction.id, null);
+
+      const toRemove: Object3D[] = [];
+      for (const child of interactionLines.children) {
+        if (child.userData.interactionId === interaction.id) {
+          toRemove.push(child);
+        }
+      }
+      for (const child of toRemove) {
+        interactionLines.remove(child);
+        if ((child as Mesh).geometry) (child as Mesh).geometry.dispose();
+        if ((child as Mesh).material) ((child as Mesh).material as MeshBasicMaterial).dispose();
+      }
+      
+      activeInteractions.delete(controller);
+    }
+
+    onInteractionStart = startInteraction;
+    onInteractionUpdate = updateInteraction;
+    onInteractionEnd = endInteraction;
 
     websocketChannel.port1.addEventListener("message", (event) => {
       const { frame, command } = event.data as import("./nanover/workers/websocket-worker").SendMessageData;
@@ -599,6 +809,7 @@ function init() {
 
       if (frame?.positions) {
         live.setPositions(frame.positions);
+        currentPositions = frame.positions;
       }
 
       if (frame?.box) {
@@ -1091,6 +1302,13 @@ updateXRUI(
         rayLine.scale.z = Math.min(intersection.distance, 2);
       } else {
         rayLine.scale.z = 0.15; 
+      }
+    }
+
+    // update active molecule interactions
+    for (const [controller] of activeInteractions) {
+      if (onInteractionUpdate) {
+        onInteractionUpdate(controller);
       }
     }
 

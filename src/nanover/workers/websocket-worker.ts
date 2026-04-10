@@ -23,11 +23,11 @@ export type CommandResponseData = {
 
 export type RecvMessageData = {
   state?: {
-    updates: { [key: string]: any };
-    removals: string[];
+    updates?: { [key: string]: any };
+    removals?: string[];
   };
 
-  command?: CommandRequestData[];
+  command?: { request: CommandRequestData };
 }
 
 export type SendMessageData = {
