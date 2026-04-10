@@ -23,6 +23,7 @@ import {
   Scene,
   ShaderMaterial,
   Sphere,
+  SphereGeometry,
   Vector3,
   WebGLRenderer,
   WebXRSpaceEventMap,
@@ -49,7 +50,7 @@ import { GDrivePicker } from './helpers/gdrive-picker';
 import { reversePainterSortStable } from '@pmndrs/uikit';
 import { createRayPointer, Pointer } from '@pmndrs/pointer-events';
 
-import { setupXRUI, updateXRUI, uikitButtons, setShowPanelInDesktop, showPanelInDesktop, getGrabHandle, startPanelGrab, endPanelGrab, isPanelBeingGrabbed, resetPanelPlacement } from './ui/xrUI';
+import { setupXRUI, updateXRUI, uikitButtons, controlPanel, setShowPanelInDesktop, showPanelInDesktop, getGrabHandle, startPanelGrab, endPanelGrab, isPanelBeingGrabbed, resetPanelPlacement, setConnectedToServer, getColocationMode } from './ui/xrUI';
 import { setupWebUI, updateWebUI } from './ui/webUI';
 import { setupQRScanner } from './helpers/qrReader';
 
@@ -80,6 +81,7 @@ function updateTrajectoryName(name: string) {
 }
 
 let xrPointers: { pointer: Pointer, controller: Group, rayLine: Mesh }[] = [];
+const controllerTips = new Map<Group, Object3D>();
 
 // grab/scale State
 const grippingControllers: Group[] = [];
@@ -105,9 +107,9 @@ function generateInteractionId(): string {
   return `web-${Date.now()}-${interactionIdCounter++}`;
 }
 
-let onInteractionStart: ((controller: Group) => void) | null = null;
-let onInteractionUpdate: ((controller: Group) => void) | null = null;
-let onInteractionEnd: ((controller: Group) => void) | null = null;
+let onInteractionStart: (controller: Group) => void = () => {};
+let onInteractionUpdate: (controller: Group) => void = () => {};
+let onInteractionEnd: (controller: Group) => void = () => {};
 
 function getURLParam(param: string): string | null {
   const paramsString = window.location.search;
@@ -118,7 +120,6 @@ function getURLParam(param: string): string | null {
 function ui_hover(group: Group<WebXRSpaceEventMap>) {
   const p = new Vector3();
   const c = new Vector3();
-  group.userData ??= {};
   group.userData.hovered?.exit();
   group.userData.hovered = undefined;
   group.userData.hoveredUIKit = undefined;
@@ -134,8 +135,6 @@ function ui_hover(group: Group<WebXRSpaceEventMap>) {
       group.userData.hoveredUIKit = uiButton;
     }
   }
-
-  group.userData.hovered?.enter();
 }
 
 const calibPoints: Mesh[] = [];
@@ -207,13 +206,12 @@ function init() {
     }
 
     function onSelect(event: XRInputSourceEvent) {
-      if (event.inputSource.handedness !== 'left') {
-        return;
-      }
+      if (!getColocationMode()) return; // anchors only in co-location setup
+      if (event.inputSource.handedness !== 'left') return; 
       
       let frame = event.frame;
 
-      const support = renderer.xr.getSession()?.enabledFeatures?.includes("anchors");
+      const support = renderer.xr.getSession()!.enabledFeatures?.includes("anchors");
 
       const clickPose = event.frame.getPose(
         event.inputSource.targetRaySpace,
@@ -438,14 +436,31 @@ function init() {
     controller2.addEventListener('squeezeend', onSqueezeEnd);
 
     // ray pointers for controllers
-    function setupRayPointer(controller: Group) {
-      const spaceRef = { current: controller };
+    function setupRayPointer(controller: Group, handIndex: number) {
+      const tip = new Object3D();
+      tip.position.set(handIndex === 0 ? -0.02 : 0.02, 0, -0.1);
+      controller.add(tip);
+      controllerTips.set(controller, tip);
+
+
+      const debugSphere = new Mesh(
+        new SphereGeometry(0.01, 8, 8),
+        new MeshBasicMaterial({ color: 0xff00ff, depthTest: false })
+      );
+      debugSphere.renderOrder = 1000;
+      tip.add(debugSphere);
+
+      const rayOrigin = new Object3D();
+      rayOrigin.position.set(handIndex === 0 ? -0.02 : 0.02, 0, -0.07);
+      controller.add(rayOrigin);
+
+      const spaceRef = { current: rayOrigin as any };
 
       // ray visual with transparency gradient using shader
       const rayLength = 1.0;
       const rayGeometry = new CylinderGeometry(0.003, 0.003, rayLength, 8);
       rayGeometry.rotateX(Math.PI / 2);
-      rayGeometry.translate(0, 0, -rayLength / 2); // origin at controller
+      rayGeometry.translate(0, 0, -rayLength / 2);
       
       // fade based on Z position
       const count = rayGeometry.attributes.position.count;
@@ -484,7 +499,8 @@ function init() {
       const rayMesh = new Mesh(rayGeometry, rayMaterial);
       rayMesh.renderOrder = 999;
       rayMesh.frustumCulled = false;
-      controller.add(rayMesh);
+      rayMesh.visible = false;
+      rayOrigin.add(rayMesh);
 
       // create ray pointer
       const pointer = createRayPointer(
@@ -515,7 +531,7 @@ function init() {
           }
         }
         
-        if (!uiInteraction && onInteractionStart) {
+        if (!uiInteraction) {
           onInteractionStart(controller);
         }
       });
@@ -526,16 +542,14 @@ function init() {
         if (isPanelBeingGrabbed()) {
           endPanelGrab();
         }
-        if (onInteractionEnd) {
-          onInteractionEnd(controller);
-        }
+        onInteractionEnd(controller);
       });
 
       xrPointers.push({ pointer, controller, rayLine: rayMesh });
     }
 
-    setupRayPointer(controller1);
-    setupRayPointer(controller2);
+    setupRayPointer(controller1, 0);
+    setupRayPointer(controller2, 1);
   }
 
   // ===== 📈 STATS & CLOCK =====
@@ -567,7 +581,7 @@ function init() {
   // ==== 🐞 DEBUG GUI ====
   {
     // check url for debug UI visibility
-    const showDebug = getURLParam('debug') !== null || getURLParam('debug') === 'true';
+    const showDebug = getURLParam('debug') !== null;
 
     const websocketWorker = new Worker(new URL("nanover/workers/websocket-worker.ts", import.meta.url), { type: "module" });
     const websocketChannel = new MessageChannel();
@@ -594,6 +608,7 @@ function init() {
         renderer.visible = false;
       }
       framePlay.setValue(false);
+      setConnectedToServer(true);
     }
 
     const boxMesh = new Mesh(
@@ -621,9 +636,9 @@ function init() {
 
     // send state update
     function sendInteractionUpdate(interactionId: string, interaction: {
-      positions: [number, number, number];
+      position: [number, number, number];
       particles: number[];
-      type?: string;
+      interaction_type?: string;
       scale?: number;
       mass_weighted?: boolean;
     } | null) {
@@ -635,10 +650,10 @@ function init() {
 
         stateUpdate.updates = {
           [`interaction.${interactionId}`]: {
-            position: interaction.positions,
+            position: interaction.position,
             particles: interaction.particles,
-            interaction_type: interaction.type ?? "constant",
-            scale: interaction.scale ?? 70,
+            interaction_type: interaction.interaction_type ?? "spring",
+            scale: interaction.scale ?? 100,
             mass_weighted: interaction.mass_weighted ?? true,
           }
         };
@@ -682,13 +697,20 @@ function init() {
       return pos;
     }
 
+    const MAX_INTERACTION_DISTANCE = 0.3;
+
     function startInteraction(controller: Group) {
+      if (getColocationMode()) return;
       if (activeInteractions.has(controller)) return;
       
-      const controllerPos = controller.getWorldPosition(new Vector3());
-      const particles = findClosestAtoms(controllerPos, 1);
+      const tip = controllerTips.get(controller)!;
+      const pos = tip.getWorldPosition(new Vector3());
+      const particles = findClosestAtoms(pos, 1);
       
       if (particles.length === 0) return;
+
+      const atomPos = getAtomWorldPosition(particles[0]);
+      if (!atomPos || pos.distanceTo(atomPos) > MAX_INTERACTION_DISTANCE) return;
       
       const interactionId = generateInteractionId();
       const interaction: IMDInteraction = {
@@ -709,13 +731,12 @@ function init() {
       line.renderOrder = 999;
       interactionLines.add(line);
       
-      // send initial state
-      const simPos = controllerPos.clone();
+      const simPos = pos.clone();
       const invMatrix = new Matrix4().copy(objects.matrixWorld).invert();
       simPos.applyMatrix4(invMatrix);
       
       sendInteractionUpdate(interactionId, {
-        positions: [simPos.x, simPos.y, simPos.z],
+        position: [simPos.x, simPos.y, simPos.z],
         particles,
       });
     }
@@ -723,17 +744,18 @@ function init() {
     // update active interaction
     function updateInteraction(controller: Group) {
       const interaction = activeInteractions.get(controller);
-      if (!interaction || !interaction.active) return;
+      if (!interaction) return;
       
-      const controllerPos = controller.getWorldPosition(new Vector3());
+      const tip = controllerTips.get(controller)!;
+      const pos = tip.getWorldPosition(new Vector3());
       
-      // tansform to simulation space
-      const simPos = controllerPos.clone();
+      // transform to simulation space
+      const simPos = pos.clone();
       const invMatrix = new Matrix4().copy(objects.matrixWorld).invert();
       simPos.applyMatrix4(invMatrix);
       
       sendInteractionUpdate(interaction.id, {
-        positions: [simPos.x, simPos.y, simPos.z],
+        position: [simPos.x, simPos.y, simPos.z],
         particles: interaction.particles,
       });
       
@@ -743,9 +765,9 @@ function init() {
         for (const child of interactionLines.children) {
           if (child.userData.interactionId === interaction.id) {
             const line = child as Mesh;
-            line.position.copy(controllerPos);
+            line.position.copy(pos);
             line.lookAt(atomPos);
-            const distance = controllerPos.distanceTo(atomPos);
+            const distance = pos.distanceTo(atomPos);
             line.scale.set(1, 1, distance);
           }
         }
@@ -766,8 +788,8 @@ function init() {
       }
       for (const child of toRemove) {
         interactionLines.remove(child);
-        if ((child as Mesh).geometry) (child as Mesh).geometry.dispose();
-        if ((child as Mesh).material) ((child as Mesh).material as MeshBasicMaterial).dispose();
+        (child as Mesh).geometry.dispose();
+        ((child as Mesh).material as MeshBasicMaterial).dispose();
       }
       
       activeInteractions.delete(controller);
@@ -1160,7 +1182,7 @@ function init() {
         if (!response.ok) throw new Error('Failed to fetch: ' + response.status);
         const arrayBuffer = await response.arrayBuffer();
 
-        const filename = url.split('/').pop()?.split('?')[0] || 'url_trajectory.msgpack';
+        const filename = url.split('/').pop()!.split('?')[0] || 'url_trajectory.msgpack';
 
         // clear existing trajectories
         for (const { renderer } of pairs) {
@@ -1297,19 +1319,27 @@ updateXRUI(
       pointer.move(scene, { timeStamp: performance.now() });
       
       const intersection = pointer.getIntersection();
-      rayLine.visible = true;
-      if (intersection?.object) {
-        rayLine.scale.z = Math.min(intersection.distance, 2);
+      // Only show ray when it hits the UI panel
+      let hitsUI = false;
+      if (intersection?.object && controlPanel) {
+        let obj: Object3D | null = intersection.object;
+        while (obj) {
+          if (obj === controlPanel) { hitsUI = true; break; }
+          obj = obj.parent;
+        }
+      }
+      if (hitsUI) {
+        rayLine.visible = true;
+        rayLine.scale.z = Math.min(intersection!.distance, 2);
       } else {
+        rayLine.visible = false;
         rayLine.scale.z = 0.15; 
       }
     }
 
     // update active molecule interactions
     for (const [controller] of activeInteractions) {
-      if (onInteractionUpdate) {
-        onInteractionUpdate(controller);
-      }
+      onInteractionUpdate(controller);
     }
 
     if (calibAnchor) {

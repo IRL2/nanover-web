@@ -16,6 +16,16 @@ export let uikitSlider: Slider | undefined;
 export let showPanelInDesktop = false;
 export let grabHandle: Container | undefined;
 
+// co-location mode state
+export let colocationMode = false;
+let isConnectedToServer = false;
+let connectedRow: Container | undefined;
+let playbackRow: Container | undefined;
+let colocationBtnText: UIText | undefined;
+let colocationColor = 0x4CAF50;
+let colocationBtn: Container | undefined;
+let colocationStatusText: UIText | undefined;
+
 // panel grab state
 let isPanelGrabbed = false;
 let hasBeenPlaced = false;
@@ -40,6 +50,47 @@ const camPos = new Vector3();
 
 export function setShowPanelInDesktop(value: boolean) {
     showPanelInDesktop = value;
+}
+
+export function setConnectedToServer(connected: boolean) {
+    isConnectedToServer = connected;
+    updateUIVisibility();
+}
+
+export function getColocationMode(): boolean {
+    return colocationMode;
+}
+
+export function setColocationStatusText(text: string) {
+    if (colocationStatusText) {
+        colocationStatusText.setProperties({ text } as any);
+    }
+}
+
+function updateUIVisibility() {
+    const showPlayback = !isConnectedToServer;
+    if (playbackRow) playbackRow.setProperties({ display: showPlayback ? "flex" : "none" } as any);
+    if (uikitSlider) uikitSlider.setProperties({ display: showPlayback ? "flex" : "none" } as any);
+    if (connectedRow) connectedRow.setProperties({ display: isConnectedToServer ? "flex" : "none" } as any);
+}
+
+function toggleColocationMode() {
+    colocationMode = !colocationMode;
+    colocationColor = colocationMode ? 0xF44336 : 0x4CAF50;
+    if (colocationBtnText) {
+        colocationBtnText.setProperties({
+            text: colocationMode ? "STOP CO-LOCATION" : "CO-LOCATION SETUP"
+        } as any);
+    }
+    if (colocationBtn) {
+        colocationBtn.setProperties({ backgroundColor: colocationColor });
+    }
+    if (colocationStatusText) {
+        colocationStatusText.setProperties({
+            display: colocationMode ? "flex" : "none",
+            text: colocationMode ? "Place anchors with left controller" : "",
+        } as any);
+    }
 }
 
 export function isPanelBeingGrabbed(): boolean {
@@ -242,6 +293,60 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     }
 
     uiContainer.add(buttonRow, uikitSlider);
+
+    playbackRow = buttonRow;
+
+    // connected mode UI: co-location setup button + status text
+    connectedRow = new Container({
+        flexDirection: "column",
+        gap: 3,
+        marginBottom: 4,
+        justifyContent: "center",
+        alignItems: "center",
+    });
+
+    colocationBtn = new Container({
+        width: 45,
+        height: 10,
+        backgroundColor: colocationColor,
+        borderRadius: 2,
+        justifyContent: "center",
+        alignItems: "center",
+        cursor: "pointer",
+        pointerEvents: "auto",
+    });
+
+    colocationBtnText = new UIText({
+        fontSize: 2.5,
+        color: 0xffffff,
+        anchorX: "center",
+        anchorY: "middle",
+    });
+    colocationBtnText.setProperties({ text: "CO-LOCATION SETUP" } as any);
+    colocationBtn.add(colocationBtnText);
+
+    colocationBtn.addEventListener('click', toggleColocationMode);
+    colocationBtn.addEventListener('pointerenter', () => {
+        colocationBtn?.setProperties({ backgroundColor: colocationColor + 0x303030 });
+    });
+    colocationBtn.addEventListener('pointerleave', () => {
+        colocationBtn?.setProperties({ backgroundColor: colocationColor });
+    });
+
+    uikitButtons.push({ container: colocationBtn, onClick: toggleColocationMode, originalColor: colocationColor });
+
+    colocationStatusText = new UIText({
+        fontSize: 2,
+        color: 0xaaaaaa,
+        anchorX: "center",
+        anchorY: "middle",
+    });
+    colocationStatusText.setProperties({ text: "", display: "none" } as any);
+
+    connectedRow.add(colocationBtn, colocationStatusText);
+    connectedRow.setProperties({ display: "none" } as any);
+
+    uiContainer.add(connectedRow);
 
     grabHandle = new Container({
         width: 15,
