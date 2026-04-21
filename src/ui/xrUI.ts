@@ -267,7 +267,6 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         onValueChange: (value: number) => {
             const frameSeek = context.getFrameSeek();
             const framePlay = context.getFramePlay();
-            console.log("Slider value changed:", value, "frameSeek:", frameSeek);
             if (frameSeek) {
                 framePlay.setValue(false); // stop playback when user drags
                 frameSeek.setValue(Math.round(value));
