@@ -21,6 +21,7 @@ export interface LiveAvatarState {
 
 export interface LiveInteractionState {
   id: string;
+  position?: [number, number, number];
   particles: number[];
 }
 
@@ -100,8 +101,11 @@ function parseInteraction(id: string, value: unknown): LiveInteractionState | un
     particles.push(particle);
   }
 
+  const positionRaw = asNumberArray(state.position, 3);
+
   return {
     id,
+    position: positionRaw ? [positionRaw[0], positionRaw[1], positionRaw[2]] : undefined,
     particles,
   };
 }

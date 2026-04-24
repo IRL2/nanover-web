@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import NaiveRenderer from './nanover/NaiveRenderer';
 import { TestTrajectory } from './nanover/types';
 import { SendMessageData } from './nanover/workers/traj-loader-worker';
+import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
 
 export interface TrajectoryPreset {
   name: string;
@@ -68,6 +69,7 @@ export class TrajectoryLoader {
   private readonly trajLoaderChannel = new MessageChannel();
   private readonly pairs: TrajectoryPair[] = [];
   private readonly sum = new Vector3();
+  private readonly worldSum = new Vector3();
   private readonly atomPosition = new Vector3();
 
   constructor(options: TrajectoryLoaderOptions) {
@@ -187,9 +189,8 @@ export class TrajectoryLoader {
     }
 
     this.sum.divideScalar(atomCountSum);
-    this.sum.multiply(this.objects.scale);
-
-    cameraControls.target.copy(this.sum);
+    simulationToWorld(updateSceneMatrixWorld(this.objects), this.sum, this.worldSum);
+    cameraControls.target.copy(this.worldSum);
     cameraControls.update();
   }
 }

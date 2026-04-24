@@ -14,6 +14,7 @@ import {
   WebXRSpaceEventMap,
 } from 'three';
 import { LiveInteractionState } from './live-frame-state';
+import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
 
 export interface InteractionUpdate {
   position: [number, number, number];
@@ -43,8 +44,10 @@ export class InteractionManager {
 
   private readonly objects: Object3D;
   private readonly interactionLines = new Group();
+  private readonly remoteInteractionLines = new Group();
   private readonly activeInteractions = new Map<Group<WebXRSpaceEventMap>, ActiveInteraction>();
   private readonly controllerTips = new Map<Group<WebXRSpaceEventMap>, Object3D>();
+  private readonly remoteLines: Mesh[] = [];
 
   private readonly lineGeometry = new CylinderGeometry(0.005, 0.005, 1, 8);
   private readonly lineMaterial = new MeshBasicMaterial({
@@ -66,7 +69,11 @@ export class InteractionManager {
 
   private readonly rotation = new Quaternion();
 
-  private readonly scale = new Vector3(0.1, 0.1, 0.1);
+  private readonly remoteScale = new Vector3(0.08, 0.08, 0.08);
+
+  private readonly remoteSimPos = new Vector3();
+
+  private readonly sceneMatrix = new Matrix4();
 
   private currentPositions: Float32Array | null = null;
 
@@ -89,6 +96,7 @@ export class InteractionManager {
     this.lineGeometry.rotateX(Math.PI / 2);
     this.lineGeometry.translate(0, 0, 0.5);
     options.scene.add(this.interactionLines);
+    options.scene.add(this.remoteInteractionLines);
   }
 
   setInteractionSender(sender: InteractionSender) {
@@ -191,28 +199,74 @@ export class InteractionManager {
     this.activeInteractions.delete(controller);
   }
 
-  renderRemoteInteractions(interactions: LiveInteractionState[], framePositions: Float32Array | undefined) {
+  renderRemoteInteractions(interactions: LiveInteractionState[], framePositions = this.currentPositions ?? undefined) {
     this.remoteInteractions.count = 0;
-    if (!framePositions) {
-      this.remoteInteractions.instanceMatrix.needsUpdate = true;
-      return;
-    }
+    let renderedLineCount = 0;
+
+    this.sceneMatrix.copy(updateSceneMatrixWorld(this.objects));
 
     for (const interaction of interactions) {
+      if (interaction.position) {
+        this.remoteSimPos.fromArray(interaction.position);
+        simulationToWorld(this.sceneMatrix, this.remoteSimPos, this.worldPos);
+      } else {
+        const atomIndex = interaction.particles[0];
+        if (!framePositions) {
+          continue;
+        }
+
+        const from = atomIndex * 3;
+        if (from + 2 >= framePositions.length) {
+          continue;
+        }
+
+        this.remoteSimPos.fromArray(framePositions, from);
+        simulationToWorld(this.sceneMatrix, this.remoteSimPos, this.worldPos);
+      }
+
+      this.rotation.identity();
+      this.matrix.compose(this.worldPos, this.rotation, this.remoteScale);
+      this.remoteInteractions.setMatrixAt(this.remoteInteractions.count, this.matrix);
+      this.remoteInteractions.count += 1;
+
+      if (!framePositions) {
+        continue;
+      }
+
       const atomIndex = interaction.particles[0];
       const from = atomIndex * 3;
       if (from + 2 >= framePositions.length) {
         continue;
       }
 
-      this.worldPos.fromArray(framePositions, from);
-      this.rotation.identity();
-      this.matrix.compose(this.worldPos, this.rotation, this.scale);
-      this.remoteInteractions.setMatrixAt(this.remoteInteractions.count, this.matrix);
-      this.remoteInteractions.count += 1;
+      this.remoteSimPos.fromArray(framePositions, from);
+      simulationToWorld(this.sceneMatrix, this.remoteSimPos, this.atomPos);
+
+      const remoteLine = this.getRemoteLine(renderedLineCount);
+      renderedLineCount += 1;
+      remoteLine.visible = true;
+      remoteLine.position.copy(this.worldPos);
+      remoteLine.lookAt(this.atomPos);
+      remoteLine.scale.set(1, 1, this.worldPos.distanceTo(this.atomPos));
+    }
+
+    for (let i = renderedLineCount; i < this.remoteLines.length; i += 1) {
+      this.remoteLines[i].visible = false;
     }
 
     this.remoteInteractions.instanceMatrix.needsUpdate = true;
+  }
+
+  private getRemoteLine(index: number): Mesh {
+    if (index < this.remoteLines.length) {
+      return this.remoteLines[index];
+    }
+
+    const line = new Mesh(this.lineGeometry, this.lineMaterial);
+    line.renderOrder = 998;
+    this.remoteInteractionLines.add(line);
+    this.remoteLines.push(line);
+    return line;
   }
 
   private generateInteractionId(): string {

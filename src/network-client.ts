@@ -1,10 +1,10 @@
 import {
   BoxGeometry,
+  Color,
   DoubleSide,
   EdgesGeometry,
   Matrix3,
   Object3D,
-  Quaternion,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -16,13 +16,23 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import NaiveRenderer from './nanover/NaiveRenderer';
 import { AvatarRendering } from './avatar-rendering';
 import { InteractionManager, InteractionUpdate } from './interaction-manager';
-import { normalizeLivePayload } from './live-frame-state';
+import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from './live-frame-state';
+import { AvatarComponentsState } from './avatar-state';
 import {
   CommandRequestData,
   CommandResponseData,
   SendMessageData as WorkerSendMessageData,
 } from './nanover/workers/websocket-worker';
 import { buildAtomColors } from './trajectory-loader';
+import {
+  applyLiveSceneTransform,
+  copySceneState,
+  sceneStateChanged,
+  SceneStateTuple,
+  simulationToWorld,
+  updateSceneMatrixWorld,
+  writeSceneState,
+} from './scene-transform';
 
 interface NetworkClientOptions {
   objects: Object3D;
@@ -60,11 +70,18 @@ export class NetworkClient {
   private readonly boxEdges = new LineSegments2(this.boxEdgesGeometry, this.boxEdgesMaterial);
   private readonly sharedState: Record<string, unknown> = {};
   private readonly pendingCommands = new Map<number, (value: unknown) => void>();
+  private readonly localAvatarId = this.createLocalAvatarId();
+  private readonly localAvatarName = `WebXR`;
+  private readonly localAvatarColor = this.createLocalAvatarColor();
+  private readonly sceneCenter = new Vector3(0.5, 0.5, 0.5);
+  private readonly sceneCenterWorld = new Vector3();
+  private readonly currentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, -1, 1, 1];
+  private readonly lastSentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, -1, 1, 1];
+  private readonly localInteractionIds = new Set<string>();
+  private remoteInteractions: LiveInteractionState[] = [];
+  private hasPublishedAvatar = false;
+  private hasSentSceneState = false;
   private nextCommandId = 1;
-  
-  private readonly scenePosition = new Vector3();
-  private readonly sceneRotation = new Quaternion();
-  private readonly sceneScale = new Vector3();
 
   private readonly boxMatrix = new Matrix3();
   private readonly boxAxisX = new Vector3();
@@ -99,10 +116,18 @@ export class NetworkClient {
   }
 
   connect(host: string) {
+    this.hasSentSceneState = false;
+    this.localInteractionIds.clear();
     this.worker.postMessage({ host });
   }
 
   sendInteractionUpdate(interactionId: string, interaction: InteractionUpdate | null) {
+    if (interaction === null) {
+      this.localInteractionIds.delete(interactionId);
+    } else {
+      this.localInteractionIds.add(interactionId);
+    }
+
     const state: SharedStateUpdate = interaction === null
       ? { removals: [`interaction.${interactionId}`] }
       : {
@@ -116,6 +141,47 @@ export class NetworkClient {
             },
           },
         };
+
+    this.channel.port1.postMessage({ state });
+  }
+
+  updateLocalState(avatarComponents: AvatarComponentsState) {
+    const updates: Record<string, unknown> = {};
+    const removals: string[] = [];
+
+    writeSceneState(this.objects, this.currentSceneState);
+    const sceneChanged = !this.hasSentSceneState
+      || sceneStateChanged(this.currentSceneState, this.lastSentSceneState);
+    if (sceneChanged) {
+      updates.scene = [...this.currentSceneState];
+      copySceneState(this.currentSceneState, this.lastSentSceneState);
+      this.hasSentSceneState = true;
+    }
+
+    if (avatarComponents.length > 0) {
+      updates[`avatar.${this.localAvatarId}`] = {
+        playerid: this.localAvatarId,
+        name: this.localAvatarName,
+        color: this.localAvatarColor,
+        components: avatarComponents,
+      };
+      this.hasPublishedAvatar = true;
+    } else if (this.hasPublishedAvatar) {
+      removals.push(`avatar.${this.localAvatarId}`);
+      this.hasPublishedAvatar = false;
+    }
+
+    if (Object.keys(updates).length === 0 && removals.length === 0) {
+      return;
+    }
+
+    const state: SharedStateUpdate = {};
+    if (Object.keys(updates).length > 0) {
+      state.updates = updates;
+    }
+    if (removals.length > 0) {
+      state.removals = removals;
+    }
 
     this.channel.port1.postMessage({ state });
   }
@@ -161,17 +227,27 @@ export class NetworkClient {
       this.updateBoxGeometry(normalized.box);
     }
 
-    if (!normalized.hasStateUpdate) {
-      return;
+    if (normalized.hasStateUpdate && normalized.state) {
+      this.applySceneState(normalized.state.scene);
+      const remoteAvatars: LiveAvatarState[] = [];
+      for (const avatar of normalized.state.avatars) {
+        if (avatar.id !== this.localAvatarId) {
+          remoteAvatars.push(avatar);
+        }
+      }
+      this.avatarRendering.render(remoteAvatars);
+      const remoteInteractions: LiveInteractionState[] = [];
+      for (const interaction of normalized.state.interactions) {
+        if (!this.localInteractionIds.has(interaction.id)) {
+          remoteInteractions.push(interaction);
+        }
+      }
+      this.remoteInteractions = remoteInteractions;
     }
 
-    if (!normalized.state) {
-      return;
+    if (normalized.positions || normalized.hasStateUpdate) {
+      this.interactionManager.renderRemoteInteractions(this.remoteInteractions, normalized.positions);
     }
-
-    this.applySceneState(normalized.state.scene);
-    this.avatarRendering.render(normalized.state.avatars);
-    this.interactionManager.renderRemoteInteractions(normalized.state.interactions, normalized.positions);
   };
 
   private resolveCommands(commands: CommandResponseData[]) {
@@ -195,17 +271,12 @@ export class NetworkClient {
       return;
     }
 
-    this.scenePosition.fromArray(scene.position);
-    this.sceneRotation.fromArray(scene.rotation);
-    this.sceneScale.fromArray(scene.scale);
-    this.sceneScale.x *= -1;
+    applyLiveSceneTransform(this.objects, scene);
+    writeSceneState(this.objects, this.lastSentSceneState);
+    this.hasSentSceneState = true;
 
-    this.objects.position.copy(this.scenePosition);
-    this.objects.rotation.setFromQuaternion(this.sceneRotation);
-    this.objects.scale.copy(this.sceneScale);
-
-    this.cameraControls.target.copy(this.objects.position);
-    this.cameraControls.target.addScaledVector(this.objects.scale, -0.5);
+    simulationToWorld(updateSceneMatrixWorld(this.objects), this.sceneCenter, this.sceneCenterWorld);
+    this.cameraControls.target.copy(this.sceneCenterWorld);
     this.cameraControls.update();
   }
 
@@ -238,6 +309,20 @@ export class NetworkClient {
     boxGeometry.dispose();
 
     this.boxEdges.visible = true;
+  }
+
+  private createLocalAvatarId(): string {
+    const randomUUID = globalThis.crypto?.randomUUID;
+    if (typeof randomUUID === 'function') {
+      return `web-${randomUUID.call(globalThis.crypto)}`;
+    }
+
+    return `web-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+  }
+
+  private createLocalAvatarColor(): [number, number, number] {
+    const color = new Color().setHSL(Math.random(), 0.75, 0.55);
+    return [color.r, color.g, color.b];
   }
 
   private updateBoxEdgeResolution = () => {

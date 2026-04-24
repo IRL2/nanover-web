@@ -422,6 +422,7 @@ class SceneApp {
 
     this.cameraControls.update();
     this.xrInput.update(controlPanel);
+    this.networkClient.updateLocalState(this.xrInput.collectAvatarComponents());
     this.renderer.render(this.scene, this.camera);
     this.stats.end();
   };

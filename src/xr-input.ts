@@ -20,6 +20,7 @@ import {
 import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from './interaction-manager';
+import { AvatarComponentsState } from './avatar-state';
 import {
   endPanelGrab,
   getGrabHandle,
@@ -64,11 +65,12 @@ export class XRInputManager {
   private readonly pointers: XRPointer[] = [];
   private readonly controllerTips = new Map<Group<WebXRSpaceEventMap>, Object3D>();
   private readonly grippingControllers: Group<WebXRSpaceEventMap>[] = [];
-
-  private readonly grabState = {
-    active: false,
+  private grabMode: 'none' | 'single' | 'dual' = 'none';
+  private readonly singleGrabPrevMatrix = new Matrix4();
+  private readonly dualGrabState = {
     prevDistance: 0,
     prevCenter: new Vector3(),
+    prevAxis: new Vector3(),
   };
 
   private readonly calibPoints: Mesh[] = [];
@@ -81,7 +83,17 @@ export class XRInputManager {
   private readonly hoverControllerPos = new Vector3();
   private readonly tempPosA = new Vector3();
   private readonly tempPosB = new Vector3();
+  private readonly tempAxis = new Vector3();
   private readonly tempCenter = new Vector3();
+  private readonly tempScale = new Vector3();
+  private readonly tempQuat = new Quaternion();
+  private readonly tempMatrix = new Matrix4();
+  private readonly tempMatrixA = new Matrix4();
+  private readonly tempMatrixB = new Matrix4();
+  private readonly tempMatrixC = new Matrix4();
+  private readonly parentInverse = new Matrix4();
+  private readonly calibratedInverse = new Matrix4();
+  private readonly componentMatrix = new Matrix4();
 
   constructor(options: XRInputOptions) {
     this.renderer = options.renderer;
@@ -100,6 +112,34 @@ export class XRInputManager {
 
   setRecenter(handler: () => void) {
     this.recenter = handler;
+  }
+
+  collectAvatarComponents(): AvatarComponentsState {
+    if (!this.renderer.xr.isPresenting) {
+      return [];
+    }
+
+    const components: AvatarComponentsState = [];
+    this.calibratedSpace.updateWorldMatrix(true, false);
+    this.calibratedInverse.copy(this.calibratedSpace.matrixWorld).invert();
+
+    const xrCamera = this.renderer.xr.getCamera();
+    xrCamera.updateWorldMatrix(true, false);
+    this.addAvatarComponent(components, 'headset', xrCamera);
+
+    const leftController = this.controllers[0];
+    if (leftController.visible) {
+      leftController.updateWorldMatrix(true, false);
+      this.addAvatarComponent(components, 'hand.left', leftController);
+    }
+
+    const rightController = this.controllers[1];
+    if (rightController.visible) {
+      rightController.updateWorldMatrix(true, false);
+      this.addAvatarComponent(components, 'hand.right', rightController);
+    }
+
+    return components;
   }
 
   update(panelRoot: Object3D | undefined) {
@@ -122,7 +162,7 @@ export class XRInputManager {
       this.updateUIButtonHover(hand);
     }
 
-    this.updateGrabScale();
+    this.updateSqueezeManipulation();
     this.updateRayPointers(panelRoot);
     this.interactionManager.updateActive();
     this.updateAnchorPose();
@@ -288,34 +328,98 @@ export class XRInputManager {
     }
   }
 
-  private updateGrabScale() {
-    if (this.grippingControllers.length < 2) {
-      this.grabState.active = false;
+  private updateSqueezeManipulation() {
+    const gripCount = this.grippingControllers.length;
+    if (gripCount === 0) {
+      this.grabMode = 'none';
       return;
     }
 
-    const c1 = this.grippingControllers[0];
-    const c2 = this.grippingControllers[1];
+    if (gripCount === 1) {
+      this.updateSingleGrab(this.grippingControllers[0]);
+      return;
+    }
+
+    this.updateDualGrab(this.grippingControllers[0], this.grippingControllers[1]);
+  }
+
+  private updateSingleGrab(controller: Group<WebXRSpaceEventMap>) {
+    controller.updateWorldMatrix(true, false);
+
+    if (this.grabMode !== 'single') {
+      this.grabMode = 'single';
+      this.singleGrabPrevMatrix.copy(controller.matrixWorld);
+      return;
+    }
+
+    this.tempMatrix.copy(this.singleGrabPrevMatrix).invert();
+    this.tempMatrixA.multiplyMatrices(controller.matrixWorld, this.tempMatrix);
+    this.applyWorldDeltaToObjects(this.tempMatrixA);
+    this.singleGrabPrevMatrix.copy(controller.matrixWorld);
+  }
+
+  private updateDualGrab(c1: Group<WebXRSpaceEventMap>, c2: Group<WebXRSpaceEventMap>) {
     c1.getWorldPosition(this.tempPosA);
     c2.getWorldPosition(this.tempPosB);
 
     const distance = this.tempPosA.distanceTo(this.tempPosB);
-    this.tempCenter.copy(this.tempPosA).lerp(this.tempPosB, 0.5);
-
-    if (this.grabState.active && this.grabState.prevDistance > 0) {
-      const ratio = distance / this.grabState.prevDistance;
-      const delta = this.tempCenter.clone().sub(this.grabState.prevCenter);
-      this.objects.position.add(delta);
-
-      const direction = this.objects.position.clone().sub(this.tempCenter);
-      this.objects.position.copy(this.tempCenter).add(direction.multiplyScalar(ratio));
-      this.objects.scale.multiplyScalar(ratio);
-    } else {
-      this.grabState.active = true;
+    if (distance < 1e-4) {
+      this.dualGrabState.prevDistance = distance;
+      this.grabMode = 'dual';
+      return;
     }
 
-    this.grabState.prevDistance = distance;
-    this.grabState.prevCenter.copy(this.tempCenter);
+    this.tempCenter.copy(this.tempPosA).lerp(this.tempPosB, 0.5);
+    this.tempAxis.copy(this.tempPosB).sub(this.tempPosA).normalize();
+
+    if (this.grabMode !== 'dual' || this.dualGrabState.prevDistance < 1e-4) {
+      this.grabMode = 'dual';
+      this.dualGrabState.prevDistance = distance;
+      this.dualGrabState.prevCenter.copy(this.tempCenter);
+      this.dualGrabState.prevAxis.copy(this.tempAxis);
+      return;
+    }
+
+    let ratio = distance / this.dualGrabState.prevDistance;
+    if (!Number.isFinite(ratio) || ratio <= 0) {
+      ratio = 1;
+    }
+    ratio = Math.min(5, Math.max(0.2, ratio));
+
+    this.tempQuat.setFromUnitVectors(this.dualGrabState.prevAxis, this.tempAxis).normalize();
+    this.tempScale.set(ratio, ratio, ratio);
+
+    this.tempMatrixA.makeTranslation(this.tempCenter.x, this.tempCenter.y, this.tempCenter.z);
+    this.tempMatrixB.makeRotationFromQuaternion(this.tempQuat);
+    this.tempMatrixC.makeScale(this.tempScale.x, this.tempScale.y, this.tempScale.z);
+    this.tempMatrix.makeTranslation(
+      -this.dualGrabState.prevCenter.x,
+      -this.dualGrabState.prevCenter.y,
+      -this.dualGrabState.prevCenter.z,
+    );
+
+    this.tempMatrixA.multiply(this.tempMatrixB).multiply(this.tempMatrixC).multiply(this.tempMatrix);
+    this.applyWorldDeltaToObjects(this.tempMatrixA);
+
+    this.dualGrabState.prevDistance = distance;
+    this.dualGrabState.prevCenter.copy(this.tempCenter);
+    this.dualGrabState.prevAxis.copy(this.tempAxis);
+  }
+
+  private applyWorldDeltaToObjects(worldDelta: Matrix4) {
+    this.objects.updateWorldMatrix(true, false);
+    this.tempMatrixA.copy(worldDelta).multiply(this.objects.matrixWorld);
+
+    const parent = this.objects.parent;
+    if (parent) {
+      parent.updateWorldMatrix(true, false);
+      this.parentInverse.copy(parent.matrixWorld).invert();
+      this.tempMatrixB.multiplyMatrices(this.parentInverse, this.tempMatrixA);
+    } else {
+      this.tempMatrixB.copy(this.tempMatrixA);
+    }
+
+    this.tempMatrixB.decompose(this.objects.position, this.objects.quaternion, this.objects.scale);
   }
 
   private updateRayPointers(panelRoot: Object3D | undefined) {
@@ -370,7 +474,8 @@ export class XRInputManager {
       return;
     }
     this.grippingControllers.push(controller);
-    this.grabState.active = false;
+    this.grabMode = 'none';
+    this.dualGrabState.prevDistance = 0;
   }
 
   private onSqueezeEnd(controller: Group<WebXRSpaceEventMap>) {
@@ -378,7 +483,8 @@ export class XRInputManager {
     if (index >= 0) {
       this.grippingControllers.splice(index, 1);
     }
-    this.grabState.active = false;
+    this.grabMode = 'none';
+    this.dualGrabState.prevDistance = 0;
   }
 
   private onSessionStart = () => {
@@ -395,6 +501,9 @@ export class XRInputManager {
       this.activeSession.removeEventListener('select', this.onSessionSelect);
     }
     this.activeSession = null;
+    this.grippingControllers.length = 0;
+    this.grabMode = 'none';
+    this.dualGrabState.prevDistance = 0;
   };
 
   private onSessionSelect = (event: XRInputSourceEvent) => {
@@ -466,6 +575,17 @@ export class XRInputManager {
       console.error(`Could not create anchor: ${String(error)}`);
     });
   };
+
+  private addAvatarComponent(components: AvatarComponentsState, name: string, source: Object3D) {
+    this.componentMatrix.multiplyMatrices(this.calibratedInverse, source.matrixWorld);
+    this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
+
+    components.push({
+      name,
+      position: [this.tempPosA.x, this.tempPosA.y, this.tempPosA.z],
+      rotation: [this.tempQuat.x, this.tempQuat.y, this.tempQuat.z, this.tempQuat.w],
+    });
+  }
 
   private makeCalibrationMarker(color: string): Mesh {
     const marker = new Mesh(
