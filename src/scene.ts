@@ -168,6 +168,12 @@ class SceneApp {
       getFrameSeek: () => this.frameSeek,
       getFramePlay: () => this.framePlay,
       updateTrajectoryName: this.updateTrajectoryName,
+      connectToServer: (host: string) => {
+        this.networkClient.connect(host);
+        this.trajectoryLoader.hideAll();
+        this.framePlay.setValue(false);
+        setConnectedToServer(true);
+      },
     });
 
     const showDebug = getURLParam('debug') !== null;

@@ -128,6 +128,40 @@ h1 {
   background: #6a8a6a;
 }
 
+.server-btn {
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
+}
+
+#tab-server {
+  align-items: stretch;
+}
+
+#server-buttons-container {
+  margin: 5px 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.server-status {
+  margin: 5px 0;
+  color: #aabbcc;
+  font-size: 13px;
+  text-align: center;
+}
+
+.server-status-error {
+  color: #ff8f8f;
+}
+
 #seek-slider {
   -webkit-appearance: none;
   appearance: none;
