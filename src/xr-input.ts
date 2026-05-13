@@ -87,6 +87,7 @@ export class XRInputManager {
   private readonly tempCenter = new Vector3();
   private readonly tempScale = new Vector3();
   private readonly tempQuat = new Quaternion();
+  private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
   private readonly tempMatrix = new Matrix4();
   private readonly tempMatrixA = new Matrix4();
   private readonly tempMatrixB = new Matrix4();
@@ -530,7 +531,7 @@ export class XRInputManager {
     const marker = this.makeCalibrationMarker(supportsAnchors ? 'green' : 'red');
     marker.position.set(
       clickPose.transform.position.x,
-      clickPose.transform.position.y,
+      0,
       clickPose.transform.position.z,
     );
     this.scene.add(marker);
@@ -579,6 +580,7 @@ export class XRInputManager {
   private addAvatarComponent(components: AvatarComponentsState, name: string, source: Object3D) {
     this.componentMatrix.multiplyMatrices(this.calibratedInverse, source.matrixWorld);
     this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
+    this.tempQuat.multiply(this.avatarFacingCorrection).normalize();
 
     components.push({
       name,
