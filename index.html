@@ -12,6 +12,7 @@
     <div id="control-panel">
       <div id="tab-bar">
         <button class="tab-btn active" data-tab="simulation">Recording</button>
+        <button class="tab-btn" data-tab="server">Server</button>
         <button class="tab-btn" data-tab="info">Info</button>
       </div>
 
@@ -23,10 +24,16 @@
         </div>
       </div>
 
+      <div class="tab-content" id="tab-server">
+        <button id="btn-refresh" class="panel-btn">Refresh</button>
+        <div id="server-buttons-container"></div>
+      </div>
+
       <div class="tab-content" id="tab-info">
-        <h2 id="info-title">NanoVer WebXR player</h2>
+        <h2 id="info-title">NanoVer WebXR client</h2>
         <a id="info-link" href="https://www.intangiblerealitieslab.org/" target="_blank" rel="noopener noreferrer">theirl.org</a>
       </div>
+      
     </div>
     <script type="module" src="/src/scene.ts"></script>
   </body>

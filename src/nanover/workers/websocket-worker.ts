@@ -4,6 +4,9 @@ import { TestFrame, TestMessageData } from "../types.js";
 
 export type SetupMessageData = {
   port: MessagePort;
+}
+
+export type ConnectMessageData = {
   host: string;
 }
 
@@ -20,11 +23,11 @@ export type CommandResponseData = {
 
 export type RecvMessageData = {
   state?: {
-    updates: { [key: string]: any };
-    removals: string[];
+    updates?: { [key: string]: any };
+    removals?: string[];
   };
 
-  command?: CommandRequestData[];
+  command?: { request: CommandRequestData };
 }
 
 export type SendMessageData = {
@@ -32,18 +35,23 @@ export type SendMessageData = {
   command?: CommandResponseData[];
 }
 
-onmessage = (event) => {
-  const { port, host } = event.data as SetupMessageData;
+let port: MessagePort | null = null;
+let socket: WebSocket | null = null;
+
+function connectToHost(host: string) {
+  if (!port) {
+    console.error("Port not initialized");
+    return;
+  }
+
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
 
   console.log("CONNECTING", host);
 
-  port.addEventListener("message", (event: { data: RecvMessageData }) => {
-    const bytes = pack(event.data);
-    socket.send(bytes);
-  });
-  port.start();
-
-  const socket = new WebSocket(host);
+  socket = new WebSocket(host);
 
   socket.addEventListener("open", (event) => {
     console.log("SOCKET CONNECTED", event);
@@ -84,6 +92,11 @@ onmessage = (event) => {
         frame.bonds = bytesToArrayManaged(data.frame["bond.pairs"], Uint32Array);
       }
 
+
+      if (data.frame["system.box.vectors"]) {
+        frame.box = bytesToArrayManaged(data.frame["system.box.vectors"], Float32Array);
+      }
+
       frame.frame = data.frame;
     }
 
@@ -96,6 +109,26 @@ onmessage = (event) => {
       frame.state = data.state;
     }
 
-    port.postMessage({ frame, command: data.command } as SendMessageData, transfer);
+    port!.postMessage({ frame, command: data.command } as SendMessageData, transfer);
   });
+}
+
+onmessage = (event) => {
+  const data = event.data as SetupMessageData | ConnectMessageData;
+
+  if ('port' in data && data.port) {
+    port = data.port;
+    port.addEventListener("message", (event: { data: RecvMessageData }) => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        const bytes = pack(event.data);
+        socket.send(bytes);
+      }
+    });
+    port.start();
+    return;
+  }
+
+  if ('host' in data && data.host) {
+    connectToHost(data.host);
+  }
 };
