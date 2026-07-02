@@ -18,6 +18,7 @@ import { AvatarRendering } from './avatar-rendering';
 import { InteractionManager, InteractionUpdate } from './interaction-manager';
 import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from './live-frame-state';
 import { AvatarComponentsState } from './avatar-state';
+import { setForceType } from './state/ui-state';
 import {
   CommandRequestData,
   CommandResponseData,
@@ -186,7 +187,7 @@ export class NetworkClient {
     this.channel.port1.postMessage({ state });
   }
 
-  runCommand(name: string, args?: object): Promise<unknown> {
+  runCommand(name: string, args?: Record<string, unknown>): Promise<unknown> {
     return new Promise<unknown>((resolve) => {
       const request: CommandRequestData = {
         id: this.nextCommandId,
@@ -201,6 +202,21 @@ export class NetworkClient {
       this.pendingCommands.set(request.id, resolve);
       this.channel.port1.postMessage({ command: { request } });
     });
+  }
+
+  setSharedState(updates: Record<string, unknown>, removals?: string[]) {
+    const state: SharedStateUpdate = {};
+    if (Object.keys(updates).length > 0) {
+      state.updates = updates;
+    }
+    if (removals && removals.length > 0) {
+      state.removals = removals;
+    }
+    if (!state.updates && !state.removals) {
+      return;
+    }
+
+    this.channel.port1.postMessage({ state });
   }
 
   private onWorkerMessage = (event: MessageEvent<WorkerSendMessageData>) => {
@@ -218,6 +234,10 @@ export class NetworkClient {
       );
     }
 
+    if (normalized.residues) {
+      this.interactionManager.setParticleResidues(normalized.residues);
+    }
+
     if (normalized.positions) {
       this.liveRenderer.setPositions(normalized.positions);
       this.interactionManager.setCurrentPositions(normalized.positions);
@@ -228,6 +248,11 @@ export class NetworkClient {
     }
 
     if (normalized.hasStateUpdate && normalized.state) {
+      const suggestedForceType = normalized.state.raw['suggested.interaction.type'];
+      if (suggestedForceType === 'gaussian' || suggestedForceType === 'spring' || suggestedForceType === 'constant') {
+        setForceType(suggestedForceType);
+      }
+
       this.applySceneState(normalized.state.scene);
       const remoteAvatars: LiveAvatarState[] = [];
       for (const avatar of normalized.state.avatars) {

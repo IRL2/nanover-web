@@ -1,30 +1,51 @@
 import { Container, Text as UIText } from '@pmndrs/uikit';
-import { Slider } from '@pmndrs/uikit-default';
 import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion } from 'three';
 import { Controller } from 'lil-gui';
+import { setupXRPlaybackUI } from './xrPlaybackUI';
+import {
+  forceType,
+  isSimulationPlaying,
+  selectionTarget,
+  setForceType,
+  setSimulationPlaying,
+  setSelectionTarget,
+} from '../state/ui-state';
+
+type ForceType = 'gaussian' | 'spring' | 'constant';
 
 export interface UIKitButton {
     container: Container;
     onClick: () => void;
     originalColor: number;
+    getDisplayColor?: (hovered: boolean) => number;
 }
 
 export let controlPanel: Container | undefined;
 export const uikitButtons: UIKitButton[] = [];
-let playButtonText: UIText | undefined;
-export let uikitSlider: Slider | undefined;
 export let showPanelInDesktop = false;
 export let grabHandle: Container | undefined;
 
-// co-location mode state
 export let colocationMode = false;
 let isConnectedToServer = false;
 let connectedRow: Container | undefined;
-let playbackRow: Container | undefined;
+let connectedControlsRow: Container | undefined;
+let playbackUI: ReturnType<typeof setupXRPlaybackUI> | undefined;
 let colocationBtnText: UIText | undefined;
 let colocationColor = 0x4CAF50;
 let colocationBtn: Container | undefined;
 let colocationStatusText: UIText | undefined;
+let simulationPlayBtnText: UIText | undefined;
+let selectionTargetBtnText: UIText | undefined;
+let colocationButton: UIKitButton | undefined;
+const forceTypeButtons = new Map<ForceType, UIKitButton>();
+
+const ACTIVE_BUTTON_SHADE = 0x303030;
+const FORCE_BUTTON_COLOR = 0x5C6BC0;
+const FORCE_TYPE_OPTIONS: { value: ForceType; label: string }[] = [
+    { value: 'gaussian', label: 'GAUSS' },
+    { value: 'spring', label: 'SPRING' },
+    { value: 'constant', label: 'CONST' },
+];
 
 // panel grab state
 let isPanelGrabbed = false;
@@ -54,6 +75,11 @@ export function setShowPanelInDesktop(value: boolean) {
 
 export function setConnectedToServer(connected: boolean) {
     isConnectedToServer = connected;
+    if (!connected) {
+        colocationMode = false;
+        colocationColor = 0x4CAF50;
+    }
+    updateColocationUI();
     updateUIVisibility();
 }
 
@@ -67,30 +93,78 @@ export function setColocationStatusText(text: string) {
     }
 }
 
+function updateSimulationPlayButtonLabel() {
+    simulationPlayBtnText?.setProperties({ text: isSimulationPlaying ? "PAUSE" : "PLAY" } as any);
+}
+
+function updateSelectionTargetButtonLabel() {
+    selectionTargetBtnText?.setProperties({
+        text: selectionTarget === 'single' ? 'SINGLE' : 'RESIDUE',
+    } as any);
+}
+
+function getButtonBackgroundColor(button: UIKitButton, hovered: boolean) {
+    if (button.getDisplayColor) {
+        return button.getDisplayColor(hovered);
+    }
+    return button.originalColor + (hovered ? ACTIVE_BUTTON_SHADE : 0);
+}
+
+function setButtonBackgroundColor(button: UIKitButton, hovered: boolean) {
+    button.container.setProperties({
+        backgroundColor: getButtonBackgroundColor(button, hovered),
+    } as any);
+}
+
+function setButtonTextSize(button: UIKitButton, fontSize: number) {
+    const buttonText = button.container.children[0];
+    if (buttonText) {
+        (buttonText as UIText).setProperties({ fontSize } as any);
+    }
+}
+
+function updateForceTypeButtons() {
+    for (const button of forceTypeButtons.values()) {
+        setButtonBackgroundColor(button, false);
+    }
+}
+
+function updateColocationUI() {
+    if (colocationBtnText) {
+        colocationBtnText.setProperties({
+            text: colocationMode ? 'STOP CO-LOCATION' : 'CO-LOCATION SETUP',
+        } as any);
+    }
+
+    if (colocationButton) {
+        setButtonBackgroundColor(colocationButton, false);
+    }
+
+    if (colocationStatusText) {
+        colocationStatusText.setProperties({
+            text: colocationMode ? 'Place anchors with left controller' : '',
+        } as any);
+    }
+}
+
 function updateUIVisibility() {
     const showPlayback = !isConnectedToServer;
-    if (playbackRow) playbackRow.setProperties({ display: showPlayback ? "flex" : "none" } as any);
-    if (uikitSlider) uikitSlider.setProperties({ display: showPlayback ? "flex" : "none" } as any);
-    if (connectedRow) connectedRow.setProperties({ display: isConnectedToServer ? "flex" : "none" } as any);
+    const showConnected = isConnectedToServer;
+    const showConnectedControls = showConnected && !colocationMode;
+    playbackUI?.setVisible(showPlayback);
+    if (connectedRow) connectedRow.setProperties({ display: showConnected ? "flex" : "none" } as any);
+    if (connectedControlsRow) connectedControlsRow.setProperties({ display: showConnectedControls ? "flex" : "none" } as any);
+    if (colocationBtn) colocationBtn.setProperties({ display: showConnected ? "flex" : "none" } as any);
+    if (colocationStatusText) {
+        colocationStatusText.setProperties({ display: showConnected && colocationMode ? "flex" : "none" } as any);
+    }
 }
 
 function toggleColocationMode() {
     colocationMode = !colocationMode;
     colocationColor = colocationMode ? 0xF44336 : 0x4CAF50;
-    if (colocationBtnText) {
-        colocationBtnText.setProperties({
-            text: colocationMode ? "STOP CO-LOCATION" : "CO-LOCATION SETUP"
-        } as any);
-    }
-    if (colocationBtn) {
-        colocationBtn.setProperties({ backgroundColor: colocationColor });
-    }
-    if (colocationStatusText) {
-        colocationStatusText.setProperties({
-            display: colocationMode ? "flex" : "none",
-            text: colocationMode ? "Place anchors with left controller" : "",
-        } as any);
-    }
+    updateColocationUI();
+    updateUIVisibility();
 }
 
 export function isPanelBeingGrabbed(): boolean {
@@ -159,10 +233,11 @@ export interface XRUIContext {
     getFrameSeek: () => Controller;
     getFramePlay: () => Controller;
     recenter: () => void;
+    runCommand: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
+    publishSharedState?: (updates: Record<string, unknown>, removals?: string[]) => void;
 }
 
 export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
-// transparent root container 
     controlPanel = new Container({
         flexDirection: "column",
         alignItems: "center",
@@ -176,7 +251,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
 
     const uiContainer = new Container({
         sizeX: 0.9,
-        sizeY: 0.33,
+        sizeY: 0.46,
         flexDirection: "column",
         backgroundColor: 0x1a1a1a,
         padding: 5,
@@ -185,15 +260,12 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     });
     controlPanel.add(uiContainer);
 
-    const buttonRow = new Container({
-        flexDirection: "row",
-        gap: 3,
-        marginBottom: 4,
-        justifyContent: "center",
-        alignItems: "center",
-    });
-
-    function createUIButton(label: string, color: number, onClick: () => void) {
+    function createUIButton(
+        label: string,
+        color: number,
+        onClick: () => void,
+        getDisplayColor?: (hovered: boolean) => number,
+    ): UIKitButton {
         const btn = new Container({
             width: 20,
             height: 10,
@@ -216,86 +288,29 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
 
         btn.add(btnText);
 
-        // pointer event listeners for raycasting
+        const button: UIKitButton = {
+            container: btn,
+            onClick,
+            originalColor: color,
+            getDisplayColor,
+        };
+
         btn.addEventListener('click', onClick);
         btn.addEventListener('pointerenter', () => {
-            btn.setProperties({ backgroundColor: color + 0x303030 });
+            setButtonBackgroundColor(button, true);
         });
         btn.addEventListener('pointerleave', () => {
-            btn.setProperties({ backgroundColor: color });
+            setButtonBackgroundColor(button, false);
         });
 
-        uikitButtons.push({ container: btn, onClick, originalColor: color });
+        uikitButtons.push(button);
 
-        return btn;
+        return button;
     }
 
-    const prevBtn = createUIButton("<", 0x444444, () => {
-        const frameSeek = context.getFrameSeek();
-        frameSeek.setValue(frameSeek.getValue() - 1);
-    });
-    const playBtn = createUIButton("PLAY", 0x2196F3, () => {
-        const framePlay = context.getFramePlay();
-        framePlay.setValue(!framePlay.getValue());
+    playbackUI = setupXRPlaybackUI(uiContainer, context, createUIButton);
 
-        if (playButtonText) {
-            playButtonText.setProperties({ text: framePlay.getValue() ? "PAUSE" : "PLAY" } as any);
-        }
-    });
-    const nextBtn = createUIButton(">", 0x444444, () => {
-        const frameSeek = context.getFrameSeek();
-        frameSeek.setValue(frameSeek.getValue() + 1);
-    });
-    const resetBtn = createUIButton("RESET", 0x666666, () => {
-        const frameSeek = context.getFrameSeek();
-        frameSeek.setValue(0);
-    });
-    const centerBtn = createUIButton("CENTER", 0x666666, () => context.recenter());
-
-    playButtonText = playBtn.children[0] as UIText;
-
-    buttonRow.add(prevBtn, playBtn, nextBtn, resetBtn, centerBtn);
-
-    uikitSlider = new Slider();
-    uikitSlider.setProperties({
-        width: "100%",
-        value: 0,
-        min: 0,
-        max: 1,
-        step: 1,
-        pointerEvents: "auto",
-        onValueChange: (value: number) => {
-            const frameSeek = context.getFrameSeek();
-            const framePlay = context.getFramePlay();
-            if (frameSeek) {
-                framePlay.setValue(false); // stop playback when user drags
-                frameSeek.setValue(Math.round(value));
-            }
-        },
-    } as any);
-
-    if (uikitSlider.thumb) {
-        uikitSlider.thumb.setProperties({
-            borderColor: 0x888888,
-            borderWidth: 1,
-            height: 12,
-            width: 12,
-            transformTranslateX: -6,
-            transformTranslateY: -4,
-        } as any);
-    }
-
-    if (uikitSlider.track) {
-        uikitSlider.track.setProperties({
-            height: 4,
-        } as any);
-    }
-
-    uiContainer.add(buttonRow, uikitSlider);
-
-    playbackRow = buttonRow;
-
-    // connected mode UI: co-location setup button + status text
+    // connected mode UI
     connectedRow = new Container({
         flexDirection: "column",
         gap: 3,
@@ -304,35 +319,92 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         alignItems: "center",
     });
 
-    colocationBtn = new Container({
-        width: 45,
-        height: 10,
-        backgroundColor: colocationColor,
-        borderRadius: 2,
+    connectedControlsRow = new Container({
+        flexDirection: "column",
+        gap: 5,
         justifyContent: "center",
         alignItems: "center",
-        cursor: "pointer",
-        pointerEvents: "auto",
     });
 
-    colocationBtnText = new UIText({
-        fontSize: 2.5,
-        color: 0xffffff,
-        anchorX: "center",
-        anchorY: "middle",
-    });
-    colocationBtnText.setProperties({ text: "CO-LOCATION SETUP" } as any);
-    colocationBtn.add(colocationBtnText);
-
-    colocationBtn.addEventListener('click', toggleColocationMode);
-    colocationBtn.addEventListener('pointerenter', () => {
-        colocationBtn?.setProperties({ backgroundColor: colocationColor + 0x303030 });
-    });
-    colocationBtn.addEventListener('pointerleave', () => {
-        colocationBtn?.setProperties({ backgroundColor: colocationColor });
+    const simulationButtonRow = new Container({
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 3,
+        justifyContent: "center",
+        alignItems: "center",
     });
 
-    uikitButtons.push({ container: colocationBtn, onClick: toggleColocationMode, originalColor: colocationColor });
+    const forceTypeRow = new Container({
+        flexDirection: "row",
+        gap: 3,
+        justifyContent: "center",
+        alignItems: "center",
+    });
+
+    const restartBtn = createUIButton("RESTART", 0x666666, () => {
+        void context.runCommand('playback/reset');
+    });
+
+    const simPlayBtn = createUIButton("PLAY", 0x2196F3, () => {
+        const nextPlaying = !isSimulationPlaying;
+        setSimulationPlaying(nextPlaying);
+        updateSimulationPlayButtonLabel();
+        void context.runCommand(nextPlaying ? 'playback/play' : 'playback/pause');
+    });
+
+    simulationPlayBtnText = simPlayBtn.container.children[0] as UIText;
+    updateSimulationPlayButtonLabel();
+
+    const stepBtn = createUIButton("STEP", 0x444444, () => {
+        void context.runCommand('playback/step');
+    });
+
+    setButtonTextSize(restartBtn, 2.5);
+    setButtonTextSize(simPlayBtn, 2.5);
+    setButtonTextSize(stepBtn, 2.5);
+
+    for (const option of FORCE_TYPE_OPTIONS) {
+        const forceButton = createUIButton(
+            option.label,
+            FORCE_BUTTON_COLOR,
+            () => {
+                setForceType(option.value);
+                updateForceTypeButtons();
+                context.publishSharedState?.({ 'suggested.interaction.type': option.value });
+            },
+            () => option.value === forceType ? FORCE_BUTTON_COLOR + ACTIVE_BUTTON_SHADE : FORCE_BUTTON_COLOR,
+        );
+        forceButton.container.setProperties({ width: 18 } as any);
+        setButtonTextSize(forceButton, 2.3);
+        forceTypeButtons.set(option.value, forceButton);
+        forceTypeRow.add(forceButton.container);
+    }
+
+    const selectionTargetBtn = createUIButton("SINGLE", 0x795548, () => {
+        const nextTarget = selectionTarget === 'single' ? 'residue' : 'single';
+        setSelectionTarget(nextTarget);
+        updateSelectionTargetButtonLabel();
+    });
+
+    selectionTargetBtnText = selectionTargetBtn.container.children[0] as UIText;
+    updateSelectionTargetButtonLabel();
+    selectionTargetBtn.container.setProperties({ width: 22 } as any);
+    setButtonTextSize(selectionTargetBtn, 2.3);
+    forceTypeRow.add(selectionTargetBtn.container);
+    simulationButtonRow.add(restartBtn.container, simPlayBtn.container, stepBtn.container);
+    connectedControlsRow.add(simulationButtonRow, forceTypeRow);
+    connectedRow.add(connectedControlsRow);
+
+    colocationButton = createUIButton(
+        "CO-LOCATION SETUP",
+        colocationColor,
+        toggleColocationMode,
+        (hovered) => colocationColor + (hovered ? ACTIVE_BUTTON_SHADE : 0),
+    );
+    colocationBtn = colocationButton.container;
+    colocationBtn.setProperties({ width: 54 } as any);
+    colocationBtnText = colocationBtn.children[0] as UIText;
+    colocationBtnText.setProperties({ fontSize: 2.2 } as any);
 
     colocationStatusText = new UIText({
         fontSize: 2,
@@ -346,6 +418,8 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     connectedRow.setProperties({ display: "none" } as any);
 
     uiContainer.add(connectedRow);
+    updateColocationUI();
+    updateForceTypeButtons();
 
     grabHandle = new Container({
         width: 15,
@@ -376,11 +450,9 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     });
 
     controlPanel.add(grabHandle);
+    updateUIVisibility();
 }
 
-/**
- * @param controllers - (renderer.xr.getController(0), etc)
- */
 export function updateXRUI(
     dt: number,
     isPresenting: boolean,
@@ -392,18 +464,13 @@ export function updateXRUI(
 ) {
     if (controlPanel) {
         controlPanel.update(dt * 1000);
+        updateForceTypeButtons();
 
-        if (uikitSlider && maxFrames > 1) {
-            uikitSlider.setProperties({
-                max: maxFrames - 1,
-                value: frameSeekValue
-            } as any);
-        }
+        playbackUI?.syncFrame(frameSeekValue, maxFrames);
 
         controlPanel.visible = isPresenting || showPanelInDesktop;
     }
 
-    
     if (grabHandle && (grabHandle as any).userData.grabRequested && !isPanelGrabbed) {
         let closestController = null;
         let minDistance = Infinity;

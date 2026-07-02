@@ -37,6 +37,7 @@ export interface NormalizedLivePayload {
   elements?: Uint8Array;
   bonds?: Uint32Array;
   box?: Float32Array;
+  residues?: Int32Array;
   state?: LiveFrameState;
   hasStateUpdate: boolean;
 }
@@ -224,6 +225,7 @@ export function normalizeLivePayload(
     elements: frame.elements,
     bonds: frame.bonds,
     box: frame.box,
+    residues: frame.residues,
     state,
     hasStateUpdate,
   };

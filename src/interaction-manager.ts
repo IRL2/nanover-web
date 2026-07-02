@@ -13,6 +13,7 @@ import {
   Vector3,
   WebXRSpaceEventMap,
 } from 'three';
+import { forceType, selectionTarget } from './state/ui-state';
 import { LiveInteractionState } from './live-frame-state';
 import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
 
@@ -76,6 +77,7 @@ export class InteractionManager {
   private readonly sceneMatrix = new Matrix4();
 
   private currentPositions: Float32Array | null = null;
+  private particleResidues: Int32Array | null = null;
 
   private interactionIdCounter = 0;
 
@@ -107,6 +109,10 @@ export class InteractionManager {
     this.currentPositions = positions;
   }
 
+  setParticleResidues(residues: Int32Array | null) {
+    this.particleResidues = residues;
+  }
+
   registerControllerTip(controller: Group<WebXRSpaceEventMap>, tip: Object3D) {
     this.controllerTips.set(controller, tip);
   }
@@ -122,18 +128,35 @@ export class InteractionManager {
     }
 
     tip.getWorldPosition(this.worldPos);
-    const particles = this.findClosestAtoms(this.worldPos, 1);
-    if (particles.length === 0) {
+    const closest = this.findClosestAtoms(this.worldPos, 1);
+    if (closest.length === 0) {
       return;
     }
 
-    const particle = particles[0];
+    const particle = closest[0];
     if (!this.getAtomWorldPosition(particle, this.atomPos)) {
       return;
     }
 
     if (this.worldPos.distanceTo(this.atomPos) > MAX_INTERACTION_DISTANCE) {
       return;
+    }
+
+    let particles: number[];
+    if (selectionTarget === 'residue' && this.particleResidues) {
+      const residueId = this.particleResidues[particle];
+      if (residueId !== undefined) {
+        particles = [];
+        for (let i = 0; i < this.particleResidues.length; i += 1) {
+          if (this.particleResidues[i] === residueId) {
+            particles.push(i);
+          }
+        }
+      } else {
+        particles = closest;
+      }
+    } else {
+      particles = closest;
     }
 
     const interactionId = this.generateInteractionId();
@@ -151,6 +174,7 @@ export class InteractionManager {
     this.sendInteraction(interactionId, {
       position: [this.simPos.x, this.simPos.y, this.simPos.z],
       particles,
+      interaction_type: forceType,
     });
   }
 
@@ -170,6 +194,7 @@ export class InteractionManager {
     this.sendInteraction(active.id, {
       position: [this.simPos.x, this.simPos.y, this.simPos.z],
       particles: active.particles,
+      interaction_type: forceType,
     });
 
     const atomIndex = active.particles[0];

@@ -13,17 +13,17 @@ export type ConnectMessageData = {
 export type CommandRequestData = {
   id: number;
   name: string;
-  arguments?: Object;
+  arguments?: Record<string, unknown>;
 }
 
 export type CommandResponseData = {
   request: Partial<CommandRequestData> & Pick<CommandRequestData, "id">;
-  response: any;
+  response: unknown;
 }
 
 export type RecvMessageData = {
   state?: {
-    updates?: { [key: string]: any };
+    updates?: Record<string, unknown>;
     removals?: string[];
   };
 
@@ -37,6 +37,10 @@ export type SendMessageData = {
 
 let port: MessagePort | null = null;
 let socket: WebSocket | null = null;
+
+function isUint8Array(value: unknown): value is Uint8Array {
+  return value instanceof Uint8Array;
+}
 
 function connectToHost(host: string) {
   if (!port) {
@@ -69,7 +73,7 @@ function connectToHost(host: string) {
     const data = event.data instanceof Blob 
       ? unpack(await event.data.arrayBuffer()) as TestMessageData
       : JSON.parse(event.data) as TestMessageData;
-    const frame = {} as TestFrame;
+    const frame: Partial<TestFrame> = {};
 
     const transfer: Transferable[] = [];
     function bytesToArrayManaged<TArray extends { buffer: ArrayBuffer }>(bytes: Uint8Array, type: ArrayConstructor<TArray>)
@@ -80,27 +84,35 @@ function connectToHost(host: string) {
     }
 
     if (data.frame) {
-      if (data.frame["particle.positions"]) {
-        frame.positions = bytesToArrayManaged(data.frame["particle.positions"], Float32Array);
+      const particlePositions = data.frame["particle.positions"];
+      if (isUint8Array(particlePositions)) {
+        frame.positions = bytesToArrayManaged(particlePositions, Float32Array);
       }
       
-      if (data.frame["particle.elements"]) {
-        frame.elements = bytesToArrayManaged(data.frame["particle.elements"], Uint8Array);
+      const particleElements = data.frame["particle.elements"];
+      if (isUint8Array(particleElements)) {
+        frame.elements = bytesToArrayManaged(particleElements, Uint8Array);
       }
 
-      if (data.frame["bond.pairs"]) {
-        frame.bonds = bytesToArrayManaged(data.frame["bond.pairs"], Uint32Array);
+      const bondPairs = data.frame["bond.pairs"];
+      if (isUint8Array(bondPairs)) {
+        frame.bonds = bytesToArrayManaged(bondPairs, Uint32Array);
       }
 
+      const particleResidues = data.frame["particle.residues"];
+      if (isUint8Array(particleResidues)) {
+        frame.residues = bytesToArrayManaged(particleResidues, Int32Array);
+      }
 
-      if (data.frame["system.box.vectors"]) {
-        frame.box = bytesToArrayManaged(data.frame["system.box.vectors"], Float32Array);
+      const systemBoxVectors = data.frame["system.box.vectors"];
+      if (isUint8Array(systemBoxVectors)) {
+        frame.box = bytesToArrayManaged(systemBoxVectors, Float32Array);
       }
 
       frame.frame = data.frame;
     }
 
-    if (data.box) {
+    if (isUint8Array(data.box)) {
       const box = bytesToArrayManaged(data.box, Float32Array);
       frame.box = box;
     }

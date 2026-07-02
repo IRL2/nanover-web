@@ -26,22 +26,18 @@ import NaiveRenderer from './nanover/NaiveRenderer';
 import {
   controlPanel,
   getColocationMode,
+  showPanelInDesktop,
   setConnectedToServer,
   setShowPanelInDesktop,
   setupXRUI,
-  showPanelInDesktop,
   updateXRUI,
 } from './ui/xrUI';
 import { setupWebUI, updateWebUI } from './ui/webUI';
-import { setupQRScanner } from './helpers/qrReader';
-import { GDrivePicker } from './helpers/gdrive-picker';
 import { AvatarRendering } from './avatar-rendering';
 import { InteractionManager } from './interaction-manager';
 import { NetworkClient } from './network-client';
 import { DEFAULT_TRAJECTORIES, TrajectoryLoader } from './trajectory-loader';
 import { XRInputManager } from './xr-input';
-
-declare const gapi: any;
 
 const CANVAS_ID = 'scene';
 
@@ -162,6 +158,8 @@ class SceneApp {
       getFrameSeek: () => this.frameSeek,
       getFramePlay: () => this.framePlay,
       recenter: this.recenter,
+      publishSharedState: (updates, removals) => this.networkClient.setSharedState(updates, removals),
+      runCommand: (name, args) => this.networkClient.runCommand(name, args),
     });
 
     setupWebUI({
@@ -302,9 +300,6 @@ class SceneApp {
       'list',
     ).name('List Sims');
 
-    this.setupGoogleDrivePicker(gui);
-    this.setupQrLoading(gui);
-
     const trajUrl = getURLParam('traj');
     if (trajUrl) {
       void this.trajectoryLoader.loadFromUrl(trajUrl).catch((error: unknown) => {
@@ -317,73 +312,6 @@ class SceneApp {
     }
 
     return gui;
-  }
-
-  private setupGoogleDrivePicker(gui: GUI) {
-    const picker = new GDrivePicker();
-    const pickerFolder = gui.addFolder('Google Drive Picker');
-
-    const state = {
-      status: 'Initializing...',
-      selectedFiles: 'No files selected',
-    };
-
-    const statusController = pickerFolder.add(state, 'status').name('Status').disable();
-    const filesController = pickerFolder.add(state, 'selectedFiles').name('Selected Files').disable();
-    const authorizeController = pickerFolder.add({ authorize: () => {
-      picker.authorize().then(() => {
-        state.status = 'Authorized';
-        statusController.updateDisplay();
-        authorizeController.name('Open');
-      }).catch((error: unknown) => {
-        console.error('Authorization failed', error);
-        state.status = 'Authorization failed';
-        statusController.updateDisplay();
-      });
-    } }, 'authorize').name('Authorize');
-
-    picker.onAuthReady((isReady) => {
-      if (!isReady) {
-        return;
-      }
-      state.status = 'Ready to authorize';
-      statusController.updateDisplay();
-    });
-
-    picker.onFileSelected(async (files) => {
-      const typedFiles = files as Array<{ driveData: { id: string; name: string } }>;
-      const fileNames = typedFiles.map((file) => file.driveData.name).join(', ');
-      state.selectedFiles = fileNames || 'No files';
-      filesController.updateDisplay();
-
-      this.trajectoryLoader.clear();
-      this.updateTrajectoryName(fileNames);
-
-      for (const file of typedFiles) {
-        try {
-          const response = await gapi.client.drive.files.get({
-            fileId: file.driveData.id,
-            alt: 'media',
-          });
-
-          const blob = await fetch(`data:application/octet-stream;base64,${btoa(response.body)}`).then((r) => r.blob());
-          const arrayBuffer = await blob.arrayBuffer();
-          this.trajectoryLoader.enqueueArrayBuffer(arrayBuffer, file.driveData.name);
-        } catch (error) {
-          console.error('Failed to load file from Google Drive', error);
-          state.status = 'Failed to load file';
-          statusController.updateDisplay();
-        }
-      }
-    });
-  }
-
-  private setupQrLoading(gui: GUI) {
-    setupQRScanner(gui, (arrayBuffer, filename) => {
-      this.trajectoryLoader.clear();
-      this.updateTrajectoryName(filename);
-      this.trajectoryLoader.enqueueArrayBuffer(arrayBuffer, filename);
-    });
   }
 
   private animate = () => {

@@ -1,3 +1,5 @@
+type SharedMessageRecord = Record<string, unknown>;
+
 export type TestTrajectoryDataBytes = {
   topology: {
     elements: Uint8Array;
@@ -15,11 +17,11 @@ export type TestTrajectory = {
 }
 
 export type TestMessageData = {
-  box: Uint8Array;
+  box?: Uint8Array;
 
-  state: Object.<string, any>;
-  frame: Object.<string, any>;
-  command?: any[];
+  state?: SharedMessageRecord;
+  frame?: SharedMessageRecord;
+  command?: unknown[];
 }
 
 export type TestFrame = {
@@ -27,7 +29,8 @@ export type TestFrame = {
   elements: Uint8Array;
   bonds: Uint32Array;
   box: Float32Array;
+  residues: Int32Array;
   
-  state: Object.<string, any>;
-  frame: Object.<string, any>;
+  state: SharedMessageRecord;
+  frame: SharedMessageRecord;
 }

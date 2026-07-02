@@ -21,6 +21,8 @@ import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from './interaction-manager';
 import { AvatarComponentsState } from './avatar-state';
+import { ColocationManager } from './xr/colocation';
+import { SqueezeManipulation } from './xr/manipulation';
 import {
   endPanelGrab,
   getGrabHandle,
@@ -51,60 +53,46 @@ interface XRInputOptions {
 export class XRInputManager {
   readonly controllers: Group<WebXRSpaceEventMap>[] = [];
   readonly hands: Group<WebXRSpaceEventMap>[] = [];
+  readonly colocation: ColocationManager;
+  readonly manipulation: SqueezeManipulation;
 
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
 
-  private readonly objects: Object3D;
   private readonly panelRot: Object3D;
-  private readonly calibratedSpace: Object3D;
   private readonly interactionManager: InteractionManager;
-  private readonly getColocationMode: () => boolean;
 
   private readonly pointers: XRPointer[] = [];
   private readonly controllerTips = new Map<Group<WebXRSpaceEventMap>, Object3D>();
-  private readonly grippingControllers: Group<WebXRSpaceEventMap>[] = [];
-  private grabMode: 'none' | 'single' | 'dual' = 'none';
-  private readonly singleGrabPrevMatrix = new Matrix4();
-  private readonly dualGrabState = {
-    prevDistance: 0,
-    prevCenter: new Vector3(),
-    prevAxis: new Vector3(),
-  };
 
-  private readonly calibPoints: Mesh[] = [];
-  private calibAnchor: XRAnchor | undefined;
   private activeSession: XRSession | null = null;
 
   private recenter: () => void = () => {};
 
   private readonly hoverButtonPos = new Vector3();
   private readonly hoverControllerPos = new Vector3();
-  private readonly tempPosA = new Vector3();
-  private readonly tempPosB = new Vector3();
-  private readonly tempAxis = new Vector3();
-  private readonly tempCenter = new Vector3();
-  private readonly tempScale = new Vector3();
-  private readonly tempQuat = new Quaternion();
-  private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
-  private readonly tempMatrix = new Matrix4();
-  private readonly tempMatrixA = new Matrix4();
-  private readonly tempMatrixB = new Matrix4();
-  private readonly tempMatrixC = new Matrix4();
-  private readonly parentInverse = new Matrix4();
   private readonly calibratedInverse = new Matrix4();
   private readonly componentMatrix = new Matrix4();
+  private readonly tempPosA = new Vector3();
+  private readonly tempQuat = new Quaternion();
+  private readonly tempScale = new Vector3();
+  private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
 
   constructor(options: XRInputOptions) {
     this.renderer = options.renderer;
     this.scene = options.scene;
     this.camera = options.camera;
-    this.objects = options.objects;
     this.panelRot = options.panelRot;
-    this.calibratedSpace = options.calibratedSpace;
     this.interactionManager = options.interactionManager;
-    this.getColocationMode = options.getColocationMode;
+
+    this.colocation = new ColocationManager({
+      renderer: options.renderer,
+      scene: options.scene,
+      calibratedSpace: options.calibratedSpace,
+      getColocationMode: options.getColocationMode,
+    });
+    this.manipulation = new SqueezeManipulation(options.objects);
 
     this.setupControllers();
     this.renderer.xr.addEventListener('sessionstart', this.onSessionStart);
@@ -121,23 +109,19 @@ export class XRInputManager {
     }
 
     const components: AvatarComponentsState = [];
-    this.calibratedSpace.updateWorldMatrix(true, false);
-    this.calibratedInverse.copy(this.calibratedSpace.matrixWorld).invert();
+    this.colocation.calibratedSpace.updateWorldMatrix(true, false);
+    this.calibratedInverse.copy(this.colocation.calibratedSpace.matrixWorld).invert();
 
     const xrCamera = this.renderer.xr.getCamera();
     xrCamera.updateWorldMatrix(true, false);
     this.addAvatarComponent(components, 'headset', xrCamera);
 
-    const leftController = this.controllers[0];
-    if (leftController.visible) {
-      leftController.updateWorldMatrix(true, false);
-      this.addAvatarComponent(components, 'hand.left', leftController);
-    }
-
-    const rightController = this.controllers[1];
-    if (rightController.visible) {
-      rightController.updateWorldMatrix(true, false);
-      this.addAvatarComponent(components, 'hand.right', rightController);
+    for (let i = 0; i < 2; i += 1) {
+      const controller = this.controllers[i];
+      if (controller && controller.visible) {
+        controller.updateWorldMatrix(true, false);
+        this.addAvatarComponent(components, i === 0 ? 'hand.left' : 'hand.right', controller);
+      }
     }
 
     return components;
@@ -163,47 +147,37 @@ export class XRInputManager {
       this.updateUIButtonHover(hand);
     }
 
-    this.updateSqueezeManipulation();
+    this.manipulation.update();
     this.updateRayPointers(panelRoot);
     this.interactionManager.updateActive();
-    this.updateAnchorPose();
+    this.colocation.updateAnchorPose();
   }
 
   private setupControllers() {
     const modelFactory = new XRControllerModelFactory();
 
-    const grip1 = this.renderer.xr.getControllerGrip(0);
-    grip1.add(modelFactory.createControllerModel(grip1));
-    this.scene.add(grip1);
+    for (let i = 0; i < 2; i += 1) {
+      const grip = this.renderer.xr.getControllerGrip(i);
+      grip.add(modelFactory.createControllerModel(grip));
+      this.scene.add(grip);
 
-    const grip2 = this.renderer.xr.getControllerGrip(1);
-    grip2.add(modelFactory.createControllerModel(grip2));
-    this.scene.add(grip2);
+      const controller = this.renderer.xr.getController(i);
+      this.controllers.push(controller);
+      this.scene.add(controller);
 
-    const controller1 = this.renderer.xr.getController(0);
-    const controller2 = this.renderer.xr.getController(1);
-    this.controllers.push(controller1, controller2);
-    this.scene.add(controller1, controller2);
+      const hand = this.renderer.xr.getHand(i);
+      hand.add(new OculusHandModel(hand));
+      this.hands.push(hand);
+      this.scene.add(hand);
 
-    const hand1 = this.renderer.xr.getHand(0);
-    hand1.add(new OculusHandModel(hand1));
-    const hand2 = this.renderer.xr.getHand(1);
-    hand2.add(new OculusHandModel(hand2));
-    this.hands.push(hand1, hand2);
-    this.scene.add(hand1, hand2);
+      this.addClicker(controller);
+      this.addClicker(hand);
 
-    this.addClicker(controller1);
-    this.addClicker(controller2);
-    this.addClicker(hand1);
-    this.addClicker(hand2);
+      controller.addEventListener('squeezestart', () => this.manipulation.startGrip(controller));
+      controller.addEventListener('squeezeend', () => this.manipulation.endGrip(controller));
 
-    controller1.addEventListener('squeezestart', () => this.onSqueezeStart(controller1));
-    controller1.addEventListener('squeezeend', () => this.onSqueezeEnd(controller1));
-    controller2.addEventListener('squeezestart', () => this.onSqueezeStart(controller2));
-    controller2.addEventListener('squeezeend', () => this.onSqueezeEnd(controller2));
-
-    this.setupRayPointer(controller1, 0);
-    this.setupRayPointer(controller2, 1);
+      this.setupRayPointer(controller, i);
+    }
   }
 
   private addClicker(group: Group<WebXRSpaceEventMap>) {
@@ -329,100 +303,6 @@ export class XRInputManager {
     }
   }
 
-  private updateSqueezeManipulation() {
-    const gripCount = this.grippingControllers.length;
-    if (gripCount === 0) {
-      this.grabMode = 'none';
-      return;
-    }
-
-    if (gripCount === 1) {
-      this.updateSingleGrab(this.grippingControllers[0]);
-      return;
-    }
-
-    this.updateDualGrab(this.grippingControllers[0], this.grippingControllers[1]);
-  }
-
-  private updateSingleGrab(controller: Group<WebXRSpaceEventMap>) {
-    controller.updateWorldMatrix(true, false);
-
-    if (this.grabMode !== 'single') {
-      this.grabMode = 'single';
-      this.singleGrabPrevMatrix.copy(controller.matrixWorld);
-      return;
-    }
-
-    this.tempMatrix.copy(this.singleGrabPrevMatrix).invert();
-    this.tempMatrixA.multiplyMatrices(controller.matrixWorld, this.tempMatrix);
-    this.applyWorldDeltaToObjects(this.tempMatrixA);
-    this.singleGrabPrevMatrix.copy(controller.matrixWorld);
-  }
-
-  private updateDualGrab(c1: Group<WebXRSpaceEventMap>, c2: Group<WebXRSpaceEventMap>) {
-    c1.getWorldPosition(this.tempPosA);
-    c2.getWorldPosition(this.tempPosB);
-
-    const distance = this.tempPosA.distanceTo(this.tempPosB);
-    if (distance < 1e-4) {
-      this.dualGrabState.prevDistance = distance;
-      this.grabMode = 'dual';
-      return;
-    }
-
-    this.tempCenter.copy(this.tempPosA).lerp(this.tempPosB, 0.5);
-    this.tempAxis.copy(this.tempPosB).sub(this.tempPosA).normalize();
-
-    if (this.grabMode !== 'dual' || this.dualGrabState.prevDistance < 1e-4) {
-      this.grabMode = 'dual';
-      this.dualGrabState.prevDistance = distance;
-      this.dualGrabState.prevCenter.copy(this.tempCenter);
-      this.dualGrabState.prevAxis.copy(this.tempAxis);
-      return;
-    }
-
-    let ratio = distance / this.dualGrabState.prevDistance;
-    if (!Number.isFinite(ratio) || ratio <= 0) {
-      ratio = 1;
-    }
-    ratio = Math.min(5, Math.max(0.2, ratio));
-
-    this.tempQuat.setFromUnitVectors(this.dualGrabState.prevAxis, this.tempAxis).normalize();
-    this.tempScale.set(ratio, ratio, ratio);
-
-    this.tempMatrixA.makeTranslation(this.tempCenter.x, this.tempCenter.y, this.tempCenter.z);
-    this.tempMatrixB.makeRotationFromQuaternion(this.tempQuat);
-    this.tempMatrixC.makeScale(this.tempScale.x, this.tempScale.y, this.tempScale.z);
-    this.tempMatrix.makeTranslation(
-      -this.dualGrabState.prevCenter.x,
-      -this.dualGrabState.prevCenter.y,
-      -this.dualGrabState.prevCenter.z,
-    );
-
-    this.tempMatrixA.multiply(this.tempMatrixB).multiply(this.tempMatrixC).multiply(this.tempMatrix);
-    this.applyWorldDeltaToObjects(this.tempMatrixA);
-
-    this.dualGrabState.prevDistance = distance;
-    this.dualGrabState.prevCenter.copy(this.tempCenter);
-    this.dualGrabState.prevAxis.copy(this.tempAxis);
-  }
-
-  private applyWorldDeltaToObjects(worldDelta: Matrix4) {
-    this.objects.updateWorldMatrix(true, false);
-    this.tempMatrixA.copy(worldDelta).multiply(this.objects.matrixWorld);
-
-    const parent = this.objects.parent;
-    if (parent) {
-      parent.updateWorldMatrix(true, false);
-      this.parentInverse.copy(parent.matrixWorld).invert();
-      this.tempMatrixB.multiplyMatrices(this.parentInverse, this.tempMatrixA);
-    } else {
-      this.tempMatrixB.copy(this.tempMatrixA);
-    }
-
-    this.tempMatrixB.decompose(this.objects.position, this.objects.quaternion, this.objects.scale);
-  }
-
   private updateRayPointers(panelRoot: Object3D | undefined) {
     for (const { pointer, rayLine } of this.pointers) {
       pointer.move(this.scene, { timeStamp: performance.now() });
@@ -440,58 +320,10 @@ export class XRInputManager {
     }
   }
 
-  private updateAnchorPose() {
-    if (!this.calibAnchor) {
-      return;
-    }
-
-    const frame = this.renderer.xr.getFrame();
-    const referenceSpace = this.renderer.xr.getReferenceSpace();
-    if (!frame || !referenceSpace) {
-      return;
-    }
-
-    const pose = frame.getPose(this.calibAnchor.anchorSpace, referenceSpace);
-    if (!pose) {
-      return;
-    }
-
-    this.calibratedSpace.position.set(
-      pose.transform.position.x,
-      pose.transform.position.y,
-      pose.transform.position.z,
-    );
-    this.calibratedSpace.quaternion.set(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w,
-    );
-    this.calibratedSpace.scale.x = -1;
-  }
-
-  private onSqueezeStart(controller: Group<WebXRSpaceEventMap>) {
-    if (this.grippingControllers.includes(controller)) {
-      return;
-    }
-    this.grippingControllers.push(controller);
-    this.grabMode = 'none';
-    this.dualGrabState.prevDistance = 0;
-  }
-
-  private onSqueezeEnd(controller: Group<WebXRSpaceEventMap>) {
-    const index = this.grippingControllers.indexOf(controller);
-    if (index >= 0) {
-      this.grippingControllers.splice(index, 1);
-    }
-    this.grabMode = 'none';
-    this.dualGrabState.prevDistance = 0;
-  }
-
   private onSessionStart = () => {
     this.activeSession = this.renderer.xr.getSession();
     if (this.activeSession) {
-      this.activeSession.addEventListener('select', this.onSessionSelect);
+      this.colocation.onSessionStart(this.activeSession);
     }
     resetPanelPlacement();
     window.setTimeout(() => this.recenter(), 500);
@@ -499,82 +331,10 @@ export class XRInputManager {
 
   private onSessionEnd = () => {
     if (this.activeSession) {
-      this.activeSession.removeEventListener('select', this.onSessionSelect);
+      this.colocation.onSessionEnd(this.activeSession);
     }
     this.activeSession = null;
-    this.grippingControllers.length = 0;
-    this.grabMode = 'none';
-    this.dualGrabState.prevDistance = 0;
-  };
-
-  private onSessionSelect = (event: XRInputSourceEvent) => {
-    if (!this.getColocationMode()) {
-      return;
-    }
-
-    if (event.inputSource.handedness !== 'left') {
-      return;
-    }
-
-    const referenceSpace = this.renderer.xr.getReferenceSpace();
-    const session = this.renderer.xr.getSession();
-    if (!referenceSpace || !session) {
-      return;
-    }
-
-    const clickPose = event.frame.getPose(event.inputSource.targetRaySpace, referenceSpace);
-    if (!clickPose) {
-      return;
-    }
-
-    const supportsAnchors = session.enabledFeatures?.includes('anchors') ?? false;
-    const marker = this.makeCalibrationMarker(supportsAnchors ? 'green' : 'red');
-    marker.position.set(
-      clickPose.transform.position.x,
-      0,
-      clickPose.transform.position.z,
-    );
-    this.scene.add(marker);
-    this.calibPoints.push(marker);
-
-    if (this.calibPoints.length > 2) {
-      const previous = this.calibPoints.shift();
-      previous?.removeFromParent();
-    }
-
-    const createAnchor = event.frame.createAnchor;
-    if (this.calibPoints.length !== 2 || !supportsAnchors || !createAnchor) {
-      return;
-    }
-
-    this.calibAnchor?.delete();
-    this.calibAnchor = undefined;
-
-    const a = this.calibPoints[0].position;
-    const b = this.calibPoints[1].position;
-    const up = new Vector3(0, 1, 0);
-    const center = b.clone().lerp(a, 0.5);
-    const normal = up.clone().cross(b.clone().sub(a)).normalize();
-    const rotation = new Quaternion()
-      .setFromRotationMatrix(new Matrix4().lookAt(center, center.clone().add(normal), up))
-      .normalize();
-
-    const pose = new XRRigidTransform(
-      { x: center.x, y: center.y, z: center.z },
-      { x: rotation.x, y: rotation.y, z: rotation.z, w: rotation.w },
-    );
-
-    const anchorPromise = event.frame.createAnchor!(pose, referenceSpace);
-    if (!anchorPromise) {
-      return;
-    }
-
-    anchorPromise.then((anchor) => {
-      this.calibAnchor = anchor;
-      this.calibratedSpace.add(this.makeCalibrationMarker('magenta'));
-    }).catch((error) => {
-      console.error(`Could not create anchor: ${String(error)}`);
-    });
+    this.manipulation.reset();
   };
 
   private addAvatarComponent(components: AvatarComponentsState, name: string, source: Object3D) {
@@ -587,15 +347,6 @@ export class XRInputManager {
       position: [this.tempPosA.x, this.tempPosA.y, this.tempPosA.z],
       rotation: [this.tempQuat.x, this.tempQuat.y, this.tempQuat.z, this.tempQuat.w],
     });
-  }
-
-  private makeCalibrationMarker(color: string): Mesh {
-    const marker = new Mesh(
-      new CylinderGeometry(),
-      new MeshBasicMaterial({ color }),
-    );
-    marker.scale.set(0.05, 0.1, 0.05);
-    return marker;
   }
 
   private isDescendantOf(child: Object3D, parent: Object3D): boolean {
