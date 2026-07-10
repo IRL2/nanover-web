@@ -13,9 +13,10 @@ import {
   Vector3,
   WebXRSpaceEventMap,
 } from 'three';
-import { forceType, selectionTarget } from './state/ui-state';
+import { forceType, forceScale, selectionTarget } from './state/ui-state';
 import { LiveInteractionState } from './live-frame-state';
 import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
+import { NaiveRenderer } from './nanover/NaiveRenderer';
 
 export interface InteractionUpdate {
   position: [number, number, number];
@@ -38,7 +39,7 @@ interface InteractionManagerOptions {
   objects: Object3D;
 }
 
-const MAX_INTERACTION_DISTANCE = 0.3;
+export const MAX_INTERACTION_DISTANCE = 0.3;
 
 export class InteractionManager {
   readonly remoteInteractions: InstancedMesh;
@@ -59,29 +60,24 @@ export class InteractionManager {
   });
 
   private readonly simPos = new Vector3();
-
   private readonly worldPos = new Vector3();
-
   private readonly atomPos = new Vector3();
-
   private readonly inverseObjects = new Matrix4();
-
   private readonly matrix = new Matrix4();
-
   private readonly rotation = new Quaternion();
-
   private readonly remoteScale = new Vector3(0.08, 0.08, 0.08);
-
   private readonly remoteSimPos = new Vector3();
-
   private readonly sceneMatrix = new Matrix4();
 
   private currentPositions: Float32Array | null = null;
   private particleResidues: Int32Array | null = null;
-
   private interactionIdCounter = 0;
-
   private sendInteraction: InteractionSender = () => {};
+
+  // --- highlight state ---
+  private highlightRenderer: NaiveRenderer | null = null;
+  private hoverParticles: Set<number> = new Set();
+  private activeHighlightParticles: Set<number> = new Set();
 
   constructor(options: InteractionManagerOptions) {
     this.objects = options.objects;
@@ -107,6 +103,9 @@ export class InteractionManager {
 
   setCurrentPositions(positions: Float32Array | null) {
     this.currentPositions = positions;
+    if (!positions) {
+      this.hoverParticles = new Set();
+    }
   }
 
   setParticleResidues(residues: Int32Array | null) {
@@ -115,6 +114,13 @@ export class InteractionManager {
 
   registerControllerTip(controller: Group<WebXRSpaceEventMap>, tip: Object3D) {
     this.controllerTips.set(controller, tip);
+  }
+
+  setHighlightRenderer(renderer: NaiveRenderer | null) {
+    if (this.highlightRenderer && renderer !== this.highlightRenderer) {
+      this.highlightRenderer.clearHighlight();
+    }
+    this.highlightRenderer = renderer;
   }
 
   start(controller: Group<WebXRSpaceEventMap>) {
@@ -170,11 +176,15 @@ export class InteractionManager {
       line,
     });
 
+    this.rebuildActiveHighlightParticles();
+    this.applyHighlight();
+
     this.toSimulationPosition(this.worldPos, this.simPos);
     this.sendInteraction(interactionId, {
       position: [this.simPos.x, this.simPos.y, this.simPos.z],
       particles,
       interaction_type: forceType,
+      scale: forceScale,
     });
   }
 
@@ -190,11 +200,13 @@ export class InteractionManager {
     }
 
     tip.getWorldPosition(this.worldPos);
+
     this.toSimulationPosition(this.worldPos, this.simPos);
     this.sendInteraction(active.id, {
       position: [this.simPos.x, this.simPos.y, this.simPos.z],
       particles: active.particles,
       interaction_type: forceType,
+      scale: forceScale,
     });
 
     const atomIndex = active.particles[0];
@@ -222,6 +234,63 @@ export class InteractionManager {
     this.sendInteraction(active.id, null);
     active.line.removeFromParent();
     this.activeInteractions.delete(controller);
+
+    this.rebuildActiveHighlightParticles();
+    this.applyHighlight();
+  }
+
+  updateHoverHighlight() {
+    if (!this.highlightRenderer) return;
+
+    const newHoverParticles = new Set<number>();
+
+    if (this.currentPositions && this.controllerTips.size > 0) {
+      this.objects.updateMatrixWorld(false);
+
+      for (const [controller, tip] of this.controllerTips.entries()) {
+        if (this.activeInteractions.has(controller)) {
+          continue;
+        }
+
+        tip.getWorldPosition(this.worldPos);
+        this.toSimulationPosition(this.worldPos, this.simPos);
+
+        let closestIdx = -1;
+        let closestDistSq = Infinity;
+        const atomCount = this.currentPositions.length / 3;
+        for (let i = 0; i < atomCount; i++) {
+          this.atomPos.fromArray(this.currentPositions, i * 3);
+          const d2 = this.simPos.distanceToSquared(this.atomPos);
+          if (d2 < closestDistSq) {
+            closestDistSq = d2;
+            closestIdx = i;
+          }
+        }
+
+        if (closestIdx >= 0 && this.getAtomWorldPosition(closestIdx, this.atomPos)) {
+          if (this.worldPos.distanceTo(this.atomPos) <= MAX_INTERACTION_DISTANCE) {
+            if (selectionTarget === 'residue' && this.particleResidues) {
+              const residueId = this.particleResidues[closestIdx];
+              if (residueId !== undefined) {
+                for (let i = 0; i < this.particleResidues.length; i++) {
+                  if (this.particleResidues[i] === residueId) {
+                    newHoverParticles.add(i);
+                  }
+                }
+              } else {
+                newHoverParticles.add(closestIdx);
+              }
+            } else {
+              newHoverParticles.add(closestIdx);
+            }
+          }
+        }
+      }
+    }
+
+    this.hoverParticles = newHoverParticles;
+    this.highlightRenderer.setHighlight(this.hoverParticles, this.activeHighlightParticles);
+    this.highlightRenderer.updateHighlightPulse();
   }
 
   renderRemoteInteractions(interactions: LiveInteractionState[], framePositions = this.currentPositions ?? undefined) {
@@ -338,5 +407,18 @@ export class InteractionManager {
 
     distances.sort((a, b) => a.distance - b.distance);
     return distances.slice(0, count).map((entry) => entry.index);
+  }
+
+  private rebuildActiveHighlightParticles() {
+    this.activeHighlightParticles.clear();
+    for (const active of this.activeInteractions.values()) {
+      for (const p of active.particles) {
+        this.activeHighlightParticles.add(p);
+      }
+    }
+  }
+
+  private applyHighlight() {
+    this.highlightRenderer?.setHighlight(this.hoverParticles, this.activeHighlightParticles);
   }
 }

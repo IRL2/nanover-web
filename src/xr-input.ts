@@ -17,6 +17,7 @@ import {
   WebGLRenderer,
   WebXRSpaceEventMap,
 } from 'three';
+import { forceScale, setForceScale } from './state/ui-state';
 import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from './interaction-manager';
@@ -69,6 +70,10 @@ export class XRInputManager {
   private activeSession: XRSession | null = null;
 
   private recenter: () => void = () => {};
+
+  private scaleTick = 0;
+  private scaleTime = 0;
+  private lastUpdateTime = 0;
 
   private readonly hoverButtonPos = new Vector3();
   private readonly hoverControllerPos = new Vector3();
@@ -150,7 +155,46 @@ export class XRInputManager {
     this.manipulation.update();
     this.updateRayPointers(panelRoot);
     this.interactionManager.updateActive();
+    this.interactionManager.updateHoverHighlight();
+    this.updateForceScaleFromThumbstick();
     this.colocation.updateAnchorPose();
+  }
+
+  private updateForceScaleFromThumbstick() {
+    const now = performance.now() / 1000;
+    const dt = this.lastUpdateTime > 0 ? Math.min(0.067, now - this.lastUpdateTime) : 0;
+    this.lastUpdateTime = now;
+
+    const x = this.getRightThumbstickX();
+    const increase = x > 0.5;
+    const decrease = x < -0.5;
+    const isScaling = increase || decrease;
+
+    this.scaleTime = isScaling ? this.scaleTime + dt : 0;
+    this.scaleTick = isScaling ? this.scaleTick + dt : 0;
+
+    if (this.scaleTick > 0.1) {
+      const sign = increase ? 1 : -1;
+      const acceleration = Math.pow(2, Math.floor(this.scaleTime));
+      const change = sign * acceleration;
+      const newScale = Math.round(Math.min(10000, Math.max(1, forceScale + change)));
+      setForceScale(newScale);
+      this.scaleTick -= 0.1;
+    }
+  }
+
+  private getRightThumbstickX(): number {
+    const session = this.renderer.xr.getSession();
+    if (!session) return 0;
+    for (const source of session.inputSources) {
+      if (source.handedness === 'right' && source.gamepad) {
+        const axes = source.gamepad.axes;
+        // WebXR standard gamepad mapping: axes[2] = thumbstick X, axes[0] = touchpad X
+        if (axes.length > 2) return axes[2];
+        if (axes.length > 0) return axes[0];
+      }
+    }
+    return 0;
   }
 
   private setupControllers() {
@@ -267,26 +311,26 @@ export class XRInputManager {
       'xr-ray',
     );
 
-    controller.addEventListener('selectstart', () => {
-      pointer.down({ timeStamp: performance.now(), button: 0 });
+      controller.addEventListener('selectstart', () => {
+        pointer.down({ timeStamp: performance.now(), button: 0 });
 
-      const intersection = pointer.getIntersection();
-      const handle = getGrabHandle();
-      if (handle && intersection && this.isDescendantOf(intersection.object, handle)) {
-        startPanelGrab(controller, this.panelRot);
-        return;
-      }
+        const intersection = pointer.getIntersection();
+        const handle = getGrabHandle();
+        if (handle && intersection && this.isDescendantOf(intersection.object, handle)) {
+          startPanelGrab(controller, this.panelRot);
+          return;
+        }
 
-      this.interactionManager.start(controller);
-    });
+        this.interactionManager.start(controller);
+      });
 
-    controller.addEventListener('selectend', () => {
-      pointer.up({ timeStamp: performance.now(), button: 0 });
-      if (isPanelBeingGrabbed()) {
-        endPanelGrab();
-      }
-      this.interactionManager.end(controller);
-    });
+      controller.addEventListener('selectend', () => {
+        pointer.up({ timeStamp: performance.now(), button: 0 });
+        if (isPanelBeingGrabbed()) {
+          endPanelGrab();
+        }
+        this.interactionManager.end(controller);
+      });
 
     this.pointers.push({ pointer, rayLine: rayMesh, tipMarker });
   }

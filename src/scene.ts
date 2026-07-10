@@ -142,6 +142,8 @@ class SceneApp {
       this.networkClient.sendInteractionUpdate(interactionId, interaction);
     });
 
+    this.interactionManager.setHighlightRenderer(this.live);
+
     this.xrInput = new XRInputManager({
       renderer: this.renderer,
       scene: threeScene,

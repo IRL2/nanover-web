@@ -4,6 +4,7 @@ import { Controller } from 'lil-gui';
 import { setupXRPlaybackUI } from './xrPlaybackUI';
 import {
   forceType,
+  forceScale,
   isSimulationPlaying,
   selectionTarget,
   setForceType,
@@ -27,6 +28,7 @@ export let grabHandle: Container | undefined;
 
 export let colocationMode = false;
 let isConnectedToServer = false;
+let uiContainerRef: Container | undefined;
 let connectedRow: Container | undefined;
 let connectedControlsRow: Container | undefined;
 let playbackUI: ReturnType<typeof setupXRPlaybackUI> | undefined;
@@ -34,6 +36,8 @@ let colocationBtnText: UIText | undefined;
 let colocationColor = 0x4CAF50;
 let colocationBtn: Container | undefined;
 let colocationStatusText: UIText | undefined;
+let forceScaleText: UIText | undefined;
+let forceScaleRow: Container | undefined;
 let simulationPlayBtnText: UIText | undefined;
 let selectionTargetBtnText: UIText | undefined;
 let colocationButton: UIKitButton | undefined;
@@ -41,6 +45,8 @@ const forceTypeButtons = new Map<ForceType, UIKitButton>();
 
 const ACTIVE_BUTTON_SHADE = 0x303030;
 const FORCE_BUTTON_COLOR = 0x5C6BC0;
+const PLAYBACK_PANEL_HEIGHT = 0.4;
+const CONNECTED_PANEL_HEIGHT = 0.55;
 const FORCE_TYPE_OPTIONS: { value: ForceType; label: string }[] = [
     { value: 'gaussian', label: 'GAUSS' },
     { value: 'spring', label: 'SPRING' },
@@ -151,12 +157,20 @@ function updateUIVisibility() {
     const showPlayback = !isConnectedToServer;
     const showConnected = isConnectedToServer;
     const showConnectedControls = showConnected && !colocationMode;
+    if (uiContainerRef) {
+        uiContainerRef.setProperties({
+            sizeY: showConnected ? CONNECTED_PANEL_HEIGHT : PLAYBACK_PANEL_HEIGHT,
+        } as any);
+    }
     playbackUI?.setVisible(showPlayback);
     if (connectedRow) connectedRow.setProperties({ display: showConnected ? "flex" : "none" } as any);
     if (connectedControlsRow) connectedControlsRow.setProperties({ display: showConnectedControls ? "flex" : "none" } as any);
     if (colocationBtn) colocationBtn.setProperties({ display: showConnected ? "flex" : "none" } as any);
     if (colocationStatusText) {
         colocationStatusText.setProperties({ display: showConnected && colocationMode ? "flex" : "none" } as any);
+    }
+    if (forceScaleText) {
+        forceScaleText.setProperties({ display: showConnected ? "flex" : "none" } as any);
     }
 }
 
@@ -251,13 +265,14 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
 
     const uiContainer = new Container({
         sizeX: 0.9,
-        sizeY: 0.46,
+        sizeY: PLAYBACK_PANEL_HEIGHT,
         flexDirection: "column",
         backgroundColor: 0x1a1a1a,
         padding: 5,
         gap: 5,
         borderRadius: 4,
     });
+    uiContainerRef = uiContainer;
     controlPanel.add(uiContainer);
 
     function createUIButton(
@@ -313,30 +328,32 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     // connected mode UI
     connectedRow = new Container({
         flexDirection: "column",
-        gap: 3,
-        marginBottom: 4,
-        justifyContent: "center",
+        width: "100%",
+        gap: 6,
         alignItems: "center",
     });
 
     connectedControlsRow = new Container({
         flexDirection: "column",
-        gap: 5,
-        justifyContent: "center",
+        width: "100%",
+        gap: 6,
         alignItems: "center",
     });
 
     const simulationButtonRow = new Container({
         flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 3,
+        width: "100%",
+        flexWrap: "no-wrap",
+        gap: 4,
         justifyContent: "center",
         alignItems: "center",
     });
 
     const forceTypeRow = new Container({
         flexDirection: "row",
-        gap: 3,
+        width: "100%",
+        flexWrap: "no-wrap",
+        gap: 2,
         justifyContent: "center",
         alignItems: "center",
     });
@@ -362,6 +379,9 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     setButtonTextSize(restartBtn, 2.5);
     setButtonTextSize(simPlayBtn, 2.5);
     setButtonTextSize(stepBtn, 2.5);
+    restartBtn.container.setProperties({ width: 18 } as any);
+    simPlayBtn.container.setProperties({ width: 18 } as any);
+    stepBtn.container.setProperties({ width: 18 } as any);
 
     for (const option of FORCE_TYPE_OPTIONS) {
         const forceButton = createUIButton(
@@ -374,7 +394,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
             },
             () => option.value === forceType ? FORCE_BUTTON_COLOR + ACTIVE_BUTTON_SHADE : FORCE_BUTTON_COLOR,
         );
-        forceButton.container.setProperties({ width: 18 } as any);
+        forceButton.container.setProperties({ width: 15 } as any);
         setButtonTextSize(forceButton, 2.3);
         forceTypeButtons.set(option.value, forceButton);
         forceTypeRow.add(forceButton.container);
@@ -388,7 +408,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
 
     selectionTargetBtnText = selectionTargetBtn.container.children[0] as UIText;
     updateSelectionTargetButtonLabel();
-    selectionTargetBtn.container.setProperties({ width: 22 } as any);
+    selectionTargetBtn.container.setProperties({ width: 18 } as any);
     setButtonTextSize(selectionTargetBtn, 2.3);
     forceTypeRow.add(selectionTargetBtn.container);
     simulationButtonRow.add(restartBtn.container, simPlayBtn.container, stepBtn.container);
@@ -402,7 +422,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         (hovered) => colocationColor + (hovered ? ACTIVE_BUTTON_SHADE : 0),
     );
     colocationBtn = colocationButton.container;
-    colocationBtn.setProperties({ width: 54 } as any);
+    colocationBtn.setProperties({ width: 54, marginTop: 1 } as any);
     colocationBtnText = colocationBtn.children[0] as UIText;
     colocationBtnText.setProperties({ fontSize: 2.2 } as any);
 
@@ -414,10 +434,25 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     });
     colocationStatusText.setProperties({ text: "", display: "none" } as any);
 
+    forceScaleText = new UIText({
+        fontSize: 2,
+        color: 0x888888,
+        anchorX: "center",
+        anchorY: "middle",
+    });
+    forceScaleText.setProperties({ text: "SCALE: 100", display: "none" } as any);
+
+    forceScaleRow = new Container({
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "center",
+    });
+    forceScaleRow.add(forceScaleText);
+
     connectedRow.add(colocationBtn, colocationStatusText);
     connectedRow.setProperties({ display: "none" } as any);
 
-    uiContainer.add(connectedRow);
+    uiContainer.add(connectedRow, forceScaleRow);
     updateColocationUI();
     updateForceTypeButtons();
 
@@ -467,6 +502,10 @@ export function updateXRUI(
         updateForceTypeButtons();
 
         playbackUI?.syncFrame(frameSeekValue, maxFrames);
+
+        if (forceScaleText) {
+            forceScaleText.setProperties({ text: `SCALE: ${Math.round(forceScale)}` } as any);
+        }
 
         controlPanel.visible = isPresenting || showPanelInDesktop;
     }
