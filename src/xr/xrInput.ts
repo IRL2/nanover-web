@@ -17,13 +17,13 @@ import {
   WebGLRenderer,
   WebXRSpaceEventMap,
 } from 'three';
-import { forceScale, setForceScale } from './state/ui-state';
+import { forceScale, setForceScale } from '../state';
 import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
-import { InteractionManager } from './interaction-manager';
-import { AvatarComponentsState } from './avatar-state';
-import { ColocationManager } from './xr/colocation';
-import { SqueezeManipulation } from './xr/manipulation';
+import { InteractionManager } from '../tools/interaction-manager';
+import { AvatarComponentsState } from '../core/avatar-state';
+import { ColocationManager } from './colocation';
+import { SqueezeManipulation } from './manipulation';
 import {
   endPanelGrab,
   getGrabHandle,
@@ -32,7 +32,7 @@ import {
   startPanelGrab,
   UIKitButton,
   uikitButtons,
-} from './ui/xrUI';
+} from '../ui/xrUI';
 
 type XRPointer = {
   pointer: Pointer;

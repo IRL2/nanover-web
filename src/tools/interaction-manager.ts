@@ -13,10 +13,10 @@ import {
   Vector3,
   WebXRSpaceEventMap,
 } from 'three';
-import { forceType, forceScale, selectionTarget } from './state/ui-state';
-import { LiveInteractionState } from './live-frame-state';
-import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
-import { NaiveRenderer } from './nanover/NaiveRenderer';
+import { forceType, forceScale, selectionTarget } from '../state';
+import { LiveInteractionState } from '../core/live-frame-state';
+import { simulationToWorld, updateSceneMatrixWorld } from '../core/scene-transform';
+import { NaiveRenderer } from '../visuals/NaiveRenderer';
 
 export interface InteractionUpdate {
   position: [number, number, number];

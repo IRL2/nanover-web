@@ -1,9 +1,9 @@
 import { Color, Object3D, Vector3 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import NaiveRenderer from './nanover/NaiveRenderer';
-import { TestTrajectory } from './nanover/types';
-import { SendMessageData } from './nanover/workers/traj-loader-worker';
-import { simulationToWorld, updateSceneMatrixWorld } from './scene-transform';
+import NaiveRenderer from '../visuals/NaiveRenderer';
+import { TestTrajectory } from '../core/types';
+import { SendMessageData } from './workers/traj-loader-worker';
+import { simulationToWorld, updateSceneMatrixWorld } from '../core/scene-transform';
 
 export interface TrajectoryPreset {
   name: string;
@@ -76,7 +76,7 @@ export class TrajectoryLoader {
     this.objects = options.objects;
     this.updateTrajectoryName = options.updateTrajectoryName;
 
-    const worker = new Worker(new URL('nanover/workers/traj-loader-worker.ts', import.meta.url), {
+    const worker = new Worker(new URL('workers/traj-loader-worker.ts', import.meta.url), {
       type: 'module',
     });
     worker.postMessage({ port: this.trajLoaderChannel.port2 }, { transfer: [this.trajLoaderChannel.port2] });

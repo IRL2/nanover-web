@@ -12,7 +12,7 @@ import {
   Sphere,
   Vector3,
 } from 'three';
-import { LiveAvatarState } from './live-frame-state';
+import { LiveAvatarState } from '../core/live-frame-state';
 
 interface AvatarRenderingOptions {
   parent: Object3D;

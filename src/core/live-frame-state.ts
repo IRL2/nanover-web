@@ -1,4 +1,4 @@
-import { SendMessageData } from './nanover/workers/websocket-worker';
+import { SendMessageData } from '../io/workers/websocket-worker';
 
 export interface LiveSceneTransform {
   position: [number, number, number];

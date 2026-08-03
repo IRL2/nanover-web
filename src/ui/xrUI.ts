@@ -10,7 +10,7 @@ import {
   setForceType,
   setSimulationPlaying,
   setSelectionTarget,
-} from '../state/ui-state';
+} from '../state';
 
 type ForceType = 'gaussian' | 'spring' | 'constant';
 

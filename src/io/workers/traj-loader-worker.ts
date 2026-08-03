@@ -1,6 +1,6 @@
 import { unpack } from "msgpackr";
-import { decode } from "../convert.ts";
-import { TestTrajectory, TestTrajectoryDataBytes } from "../types";
+import { decode } from "../../core/convert.ts";
+import { TestTrajectory, TestTrajectoryDataBytes } from "../../core/types";
 
 export type SetupMessageData = {
   port: MessagePort;

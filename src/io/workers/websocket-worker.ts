@@ -1,6 +1,6 @@
 import { unpack, pack } from "msgpackr";
-import { bytesToArray, ArrayConstructor } from "../convert.js";
-import { TestFrame, TestMessageData } from "../types.js";
+import { bytesToArray, ArrayConstructor } from "../../core/convert.js";
+import { TestFrame, TestMessageData } from "../../core/types.js";
 
 export type SetupMessageData = {
   port: MessagePort;

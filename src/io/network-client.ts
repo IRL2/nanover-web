@@ -13,17 +13,17 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import NaiveRenderer from './nanover/NaiveRenderer';
-import { AvatarRendering } from './avatar-rendering';
-import { InteractionManager, InteractionUpdate } from './interaction-manager';
-import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from './live-frame-state';
-import { AvatarComponentsState } from './avatar-state';
-import { setForceType } from './state/ui-state';
+import NaiveRenderer from '../visuals/NaiveRenderer';
+import { AvatarRendering } from '../visuals/avatar-rendering';
+import { InteractionManager, InteractionUpdate } from '../tools/interaction-manager';
+import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from '../core/live-frame-state';
+import { AvatarComponentsState } from '../core/avatar-state';
+import { setForceType } from '../state';
 import {
   CommandRequestData,
   CommandResponseData,
   SendMessageData as WorkerSendMessageData,
-} from './nanover/workers/websocket-worker';
+} from './workers/websocket-worker';
 import { buildAtomColors } from './trajectory-loader';
 import {
   applyLiveSceneTransform,
@@ -33,7 +33,7 @@ import {
   simulationToWorld,
   updateSceneMatrixWorld,
   writeSceneState,
-} from './scene-transform';
+} from '../core/scene-transform';
 
 interface NetworkClientOptions {
   objects: Object3D;
@@ -110,7 +110,7 @@ export class NetworkClient {
     window.addEventListener('resize', this.updateBoxEdgeResolution);
     this.objects.add(this.boxEdges);
 
-    this.worker = new Worker(new URL('nanover/workers/websocket-worker.ts', import.meta.url), { type: 'module' });
+    this.worker = new Worker(new URL('workers/websocket-worker.ts', import.meta.url), { type: 'module' });
     this.worker.postMessage({ port: this.channel.port2 }, { transfer: [this.channel.port2] });
     this.channel.port1.addEventListener('message', this.onWorkerMessage);
     this.channel.port1.start();

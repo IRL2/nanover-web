@@ -22,7 +22,7 @@ import { reversePainterSortStable } from '@pmndrs/uikit';
 import { toggleFullScreen } from './helpers/fullscreen';
 import { resizeRendererToDisplaySize } from './helpers/responsiveness';
 import './style.css';
-import NaiveRenderer from './nanover/NaiveRenderer';
+import NaiveRenderer from './visuals/NaiveRenderer';
 import {
   controlPanel,
   getColocationMode,
@@ -33,11 +33,11 @@ import {
   updateXRUI,
 } from './ui/xrUI';
 import { setupWebUI, updateWebUI } from './ui/webUI';
-import { AvatarRendering } from './avatar-rendering';
-import { InteractionManager } from './interaction-manager';
-import { NetworkClient } from './network-client';
-import { DEFAULT_TRAJECTORIES, TrajectoryLoader } from './trajectory-loader';
-import { XRInputManager } from './xr-input';
+import { AvatarRendering } from './visuals/avatar-rendering';
+import { InteractionManager } from './tools/interaction-manager';
+import { NetworkClient } from './io/network-client';
+import { DEFAULT_TRAJECTORIES, TrajectoryLoader } from './io/trajectory-loader';
+import { XRInputManager } from './xr/xrInput';
 
 const CANVAS_ID = 'scene';
 
