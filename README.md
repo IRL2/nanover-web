@@ -69,11 +69,13 @@ Run a NanoVer python server with nanover-server, giving ssl credentials, and the
 nanover-server --omm tutorials/ase/openmm_files/17-ala.xml --ssl localhost.pem localhost.key key_password --cloud-discovery irl-discovery.onrender.com
 ```
 
-### Serving NanoVer to the WebXR client from Python/Jupyter notebook
+## Serving NanoVer to the WebXR client from Python/Jupyter notebook
 
 Build the SSL context. Set the passphrase you have chosen in the `password` argument of `load_cert_chain`:
 
 ```python
+import ssl
+
 certfile = str("localhost.pem")
 keyfile = str("localhost.key")
 
@@ -91,7 +93,7 @@ imd_runner = OmniRunner.with_basic_server(
 imd_runner.load(0)
 ```
 
-The server also hosts a small landing page. Opening this page once lets the device trust the self-signed certificate, otherwise wss connections might not work. This step is necessary for the Meta Quest Browser:
+The server also hosts a small landing page. Opening this page once lets the device trust the self-signed certificate, otherwise wss connections might not work (won't work in Firefox anyway). This step is necessary for the Meta Quest Browser:
 
 ```python
 from nanover.utilities.network import get_local_ip
@@ -104,6 +106,8 @@ print(f"Network:  https://{get_local_ip()}:{services['https']}")
 Advertise on cloud discovery:
 
 ```python
+from nanover.websocket.discovery import DiscoveryClient
+
 advertise = DiscoveryClient.advertise_server(
     "irl-discovery.onrender.com", app_server=imd_runner.app_server
 )
