@@ -17,6 +17,7 @@
     "@pmndrs/pointer-events": "^6.6.29",
     "@pmndrs/uikit": "^1.0.61",
     "@pmndrs/uikit-default": "^1.0.61",
+    "@twemoji/api": "^17.0.3",
     "digitalbacon-ui": "^0.2.1",
     "jsqr": "^1.4.0",
     "lil-gui": "^0.20.0",

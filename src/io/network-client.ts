@@ -49,6 +49,12 @@ type SharedStateUpdate = {
   removals?: string[];
 };
 
+export type UserCommand = {
+  name: string;
+  label?: string;
+  icon?: string;
+};
+
 const BOX_EDGE_WIDTH_PX = 3;
 
 export class NetworkClient {
@@ -85,6 +91,8 @@ export class NetworkClient {
   private hasSentSceneState = false;
   private nextCommandId = 1;
   private notificationHandler: ((message: string) => void) | null = null;
+  private userCommandsHandler: ((commands: UserCommand[]) => void) | null = null;
+  private userCommands: UserCommand[] = [];
 
   private readonly boxMatrix = new Matrix3();
   private readonly boxAxisX = new Vector3();
@@ -121,11 +129,17 @@ export class NetworkClient {
   connect(host: string) {
     this.hasSentSceneState = false;
     this.localInteractionIds.clear();
+    this.setUserCommands([]);
     this.worker.postMessage({ host });
   }
 
   setNotificationHandler(handler: (message: string) => void) {
     this.notificationHandler = handler;
+  }
+
+  setUserCommandsHandler(handler: (commands: UserCommand[]) => void) {
+    this.userCommandsHandler = handler;
+    handler(this.userCommands);
   }
 
   private get notifyCommandName(): string {
@@ -242,6 +256,11 @@ export class NetworkClient {
 
     if (message.event === 'open') {
       this.registerNotifyCommand();
+      void this.runCommand('commands/list').then((result) => {
+        this.setUserCommands(this.parseUserCommands(result));
+      });
+    } else if (message.event === 'close') {
+      this.setUserCommands([]);
     }
 
     const normalized = normalizeLivePayload(message, this.sharedState);
@@ -340,6 +359,46 @@ export class NetworkClient {
     this.channel.port1.postMessage({
       command: { request: { id: request.id, name: request.name }, response: {} },
     });
+  }
+
+  private setUserCommands(commands: UserCommand[]) {
+    this.userCommands = commands;
+    this.userCommandsHandler?.(commands);
+  }
+
+  private parseUserCommands(result: unknown): UserCommand[] {
+    if (!result || typeof result !== 'object') {
+      return [];
+    }
+
+    const commands = (result as { commands?: unknown }).commands;
+    if (!Array.isArray(commands)) {
+      return [];
+    }
+
+    const userCommands: UserCommand[] = [];
+    for (const command of commands) {
+      if (!command || typeof command !== 'object') {
+        continue;
+      }
+
+      const { name, label, icon } = command as {
+        name?: unknown;
+        label?: unknown;
+        icon?: unknown;
+      };
+      if (typeof name !== 'string' || !name.startsWith('user/')) {
+        continue;
+      }
+
+      userCommands.push({
+        name,
+        label: typeof label === 'string' ? label : undefined,
+        icon: typeof icon === 'string' ? icon : undefined,
+      });
+    }
+
+    return userCommands;
   }
 
   private applySceneState(scene: {

@@ -26,6 +26,7 @@ import NaiveRenderer from './visuals/NaiveRenderer';
 import {
   controlPanel,
   getColocationMode,
+  setUserCommands,
   showPanelInDesktop,
   setConnectedToServer,
   setShowPanelInDesktop,
@@ -141,6 +142,7 @@ class SceneApp {
 
     setupNotificationUI(threeScene);
     this.networkClient.setNotificationHandler(showNotification);
+    this.networkClient.setUserCommandsHandler(setUserCommands);
 
     this.interactionManager.setInteractionSender((interactionId, interaction) => {
       this.networkClient.sendInteractionUpdate(interactionId, interaction);

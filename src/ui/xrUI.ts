@@ -1,7 +1,9 @@
-import { Container, Text as UIText } from '@pmndrs/uikit';
+import { Container, Svg, Text as UIText } from '@pmndrs/uikit';
 import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion } from 'three';
 import { Controller } from 'lil-gui';
+import twemoji from '@twemoji/api';
 import { setupXRPlaybackUI } from './xrPlaybackUI';
+import type { UserCommand } from '../io/network-client';
 import {
   forceType,
   forceScale,
@@ -32,6 +34,10 @@ let uiContainerRef: Container | undefined;
 let connectedRow: Container | undefined;
 let connectedControlsRow: Container | undefined;
 let playbackUI: ReturnType<typeof setupXRPlaybackUI> | undefined;
+let userCommandsPanel: Container | undefined;
+let renderUserCommands: ((commands: UserCommand[]) => void) | undefined;
+let userCommands: UserCommand[] = [];
+let userCommandButtons: UIKitButton[] = [];
 let colocationBtnText: UIText | undefined;
 let colocationColor = 0x4CAF50;
 let colocationBtn: Container | undefined;
@@ -52,6 +58,17 @@ const FORCE_TYPE_OPTIONS: { value: ForceType; label: string }[] = [
     { value: 'spring', label: 'SPRING' },
     { value: 'constant', label: 'CONST' },
 ];
+
+function getEmojiSvgUrl(emoji: string): string {
+    let url = '';
+    twemoji.parse(emoji, {
+        callback: (icon) => {
+            url = `https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/${icon}.svg`;
+            return '';
+        },
+    });
+    return url;
+}
 
 // panel grab state
 let isPanelGrabbed = false;
@@ -97,6 +114,11 @@ export function setColocationStatusText(text: string) {
     if (colocationStatusText) {
         colocationStatusText.setProperties({ text } as any);
     }
+}
+
+export function setUserCommands(commands: UserCommand[]) {
+    userCommands = commands;
+    renderUserCommands?.(commands);
 }
 
 function updateSimulationPlayButtonLabel() {
@@ -323,6 +345,94 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         return button;
     }
 
+    userCommandsPanel = new Container({
+        sizeX: 0.9,
+        flexDirection: "column",
+        alignItems: "stretch",
+        backgroundColor: 0x1a1a1a,
+        padding: 5,
+        gap: 4,
+        borderRadius: 4,
+        display: "none",
+    });
+
+    const userCommandsTitle = new UIText({
+        fontSize: 2.4,
+        color: 0xaaaaaa,
+        anchorX: "center",
+        anchorY: "middle",
+    });
+    userCommandsTitle.setProperties({ text: "COMMANDS" } as any);
+    userCommandsPanel.add(userCommandsTitle);
+
+    const userCommandsRow = new Container({
+        flexDirection: "row",
+        width: "100%",
+        gap: 4,
+        justifyContent: "center",
+        alignItems: "flex-start",
+    });
+    userCommandsPanel.add(userCommandsRow);
+
+    renderUserCommands = (commands) => {
+        for (const button of userCommandButtons) {
+            const buttonIndex = uikitButtons.indexOf(button);
+            if (buttonIndex >= 0) {
+                uikitButtons.splice(buttonIndex, 1);
+            }
+        }
+        userCommandButtons = [];
+        userCommandsRow.clear();
+
+        for (const command of commands) {
+            const label = command.label ?? command.name.split('/').slice(1).join(' ');
+            const commandCell = new Container({
+                flexDirection: "column",
+                width: 18,
+                gap: 1,
+                alignItems: "center",
+            });
+            const button = createUIButton(
+                '',
+                0x546E7A,
+                () => { void context.runCommand(command.name); },
+            );
+            button.container.setProperties({ width: 12, height: 12 } as any);
+
+            const buttonText = button.container.children[0];
+            if (buttonText) {
+                button.container.remove(buttonText);
+                (buttonText as UIText).dispose();
+            }
+
+            if (command.icon) {
+                button.container.add(new Svg({
+                    src: getEmojiSvgUrl(command.icon),
+                    width: 8,
+                    height: 8,
+                    keepAspectRatio: true,
+                }));
+            }
+
+            const commandLabel = new UIText({
+                width: 12,
+                fontSize: 1.5,
+                color: 0xcccccc,
+                textAlign: "center",
+                anchorX: "center",
+                anchorY: "middle",
+            });
+            commandLabel.setProperties({ text: label } as any);
+
+            commandCell.add(button.container, commandLabel);
+            userCommandsRow.add(commandCell);
+            userCommandButtons.push(button);
+        }
+
+        userCommandsPanel!.setProperties({ display: commands.length > 0 ? "flex" : "none" } as any);
+    };
+    renderUserCommands(userCommands);
+
     playbackUI = setupXRPlaybackUI(uiContainer, context, createUIButton);
 
     // connected mode UI
@@ -484,7 +594,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
         (grabHandle as any).userData.grabRequested = false;
     });
 
-    controlPanel.add(grabHandle);
+    controlPanel.add(userCommandsPanel, grabHandle);
     updateUIVisibility();
 }
 

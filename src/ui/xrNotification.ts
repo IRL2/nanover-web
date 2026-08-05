@@ -1,8 +1,8 @@
 import { Container, Text as UIText } from '@pmndrs/uikit';
-import { Object3D, PerspectiveCamera, Vector3 } from 'three';
+import { Object3D, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 
 const NOTIFICATION_DURATION = 4;
-const NOTIFICATION_OFFSET_Y = 0.12;
+const NOTIFICATION_OFFSET = new Vector3(-0.14, 0.03, 0);
 
 let notificationRoot: Object3D | undefined;
 let notificationPanel: Container | undefined;
@@ -11,6 +11,8 @@ let notificationTimer = 0;
 
 const controllerPos = new Vector3();
 const cameraPos = new Vector3();
+const controllerRotation = new Quaternion();
+const notificationOffset = new Vector3();
 
 export function setupNotificationUI(parent: Object3D) {
     notificationRoot = new Object3D();
@@ -22,13 +24,13 @@ export function setupNotificationUI(parent: Object3D) {
         alignItems: "center",
         justifyContent: "center",
         backgroundColor: 0x1a1a1a,
-        maxWidth: 40,
-        padding: 4,
+        maxWidth: 30,
+        padding: 3,
         borderRadius: 3,
     });
 
     notificationText = new UIText({
-        fontSize: 2.5,
+        fontSize: 2,
         color: 0xffffff,
         anchorX: "center",
         anchorY: "middle",
@@ -73,7 +75,9 @@ export function updateNotificationUI(
     notificationPanel.update(dt * 1000);
 
     rightController.getWorldPosition(controllerPos);
-    notificationRoot.position.set(controllerPos.x, controllerPos.y + NOTIFICATION_OFFSET_Y, controllerPos.z);
+    rightController.getWorldQuaternion(controllerRotation);
+    notificationOffset.copy(NOTIFICATION_OFFSET).applyQuaternion(controllerRotation);
+    notificationRoot.position.copy(controllerPos).add(notificationOffset);
 
     camera.getWorldPosition(cameraPos);
     notificationRoot.lookAt(cameraPos);

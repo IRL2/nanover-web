@@ -134,17 +134,8 @@ export class InteractionManager {
     }
 
     tip.getWorldPosition(this.worldPos);
-    const closest = this.findClosestAtoms(this.worldPos, 1);
-    if (closest.length === 0) {
-      return;
-    }
-
-    const particle = closest[0];
-    if (!this.getAtomWorldPosition(particle, this.atomPos)) {
-      return;
-    }
-
-    if (this.worldPos.distanceTo(this.atomPos) > MAX_INTERACTION_DISTANCE) {
+    const particle = this.findNearbyParticle(this.worldPos);
+    if (particle === undefined) {
       return;
     }
 
@@ -159,10 +150,10 @@ export class InteractionManager {
           }
         }
       } else {
-        particles = closest;
+        particles = [particle];
       }
     } else {
-      particles = closest;
+      particles = [particle];
     }
 
     const interactionId = this.generateInteractionId();
@@ -253,36 +244,22 @@ export class InteractionManager {
         }
 
         tip.getWorldPosition(this.worldPos);
-        this.toSimulationPosition(this.worldPos, this.simPos);
+        const particle = this.findNearbyParticle(this.worldPos);
 
-        let closestIdx = -1;
-        let closestDistSq = Infinity;
-        const atomCount = this.currentPositions.length / 3;
-        for (let i = 0; i < atomCount; i++) {
-          this.atomPos.fromArray(this.currentPositions, i * 3);
-          const d2 = this.simPos.distanceToSquared(this.atomPos);
-          if (d2 < closestDistSq) {
-            closestDistSq = d2;
-            closestIdx = i;
-          }
-        }
-
-        if (closestIdx >= 0 && this.getAtomWorldPosition(closestIdx, this.atomPos)) {
-          if (this.worldPos.distanceTo(this.atomPos) <= MAX_INTERACTION_DISTANCE) {
-            if (selectionTarget === 'residue' && this.particleResidues) {
-              const residueId = this.particleResidues[closestIdx];
-              if (residueId !== undefined) {
-                for (let i = 0; i < this.particleResidues.length; i++) {
-                  if (this.particleResidues[i] === residueId) {
-                    newHoverParticles.add(i);
-                  }
+        if (particle !== undefined) {
+          if (selectionTarget === 'residue' && this.particleResidues) {
+            const residueId = this.particleResidues[particle];
+            if (residueId !== undefined) {
+              for (let i = 0; i < this.particleResidues.length; i++) {
+                if (this.particleResidues[i] === residueId) {
+                  newHoverParticles.add(i);
                 }
-              } else {
-                newHoverParticles.add(closestIdx);
               }
             } else {
-              newHoverParticles.add(closestIdx);
+              newHoverParticles.add(particle);
             }
+          } else {
+            newHoverParticles.add(particle);
           }
         }
       }
@@ -386,6 +363,21 @@ export class InteractionManager {
 
     target.fromArray(this.currentPositions, from).applyMatrix4(this.objects.matrixWorld);
     return true;
+  }
+
+  private findNearbyParticle(worldPos: Vector3): number | undefined {
+    const closest = this.findClosestAtoms(worldPos, 1);
+    if (closest.length === 0) {
+      return undefined;
+    }
+
+    const particle = closest[0];
+    if (!this.getAtomWorldPosition(particle, this.atomPos)
+      || worldPos.distanceTo(this.atomPos) > MAX_INTERACTION_DISTANCE) {
+      return undefined;
+    }
+
+    return particle;
   }
 
   private findClosestAtoms(worldPos: Vector3, count: number): number[] {
