@@ -33,6 +33,7 @@ import {
   updateXRUI,
 } from './ui/xrUI';
 import { setupWebUI, updateWebUI } from './ui/webUI';
+import { setupNotificationUI, showNotification, updateNotificationUI } from './ui/xrNotification';
 import { AvatarRendering } from './visuals/avatar-rendering';
 import { InteractionManager } from './tools/interaction-manager';
 import { NetworkClient } from './io/network-client';
@@ -137,6 +138,9 @@ class SceneApp {
       avatarRendering: this.avatarRendering,
       interactionManager: this.interactionManager,
     });
+
+    setupNotificationUI(threeScene);
+    this.networkClient.setNotificationHandler(showNotification);
 
     this.interactionManager.setInteractionSender((interactionId, interaction) => {
       this.networkClient.sendInteractionUpdate(interactionId, interaction);
@@ -350,6 +354,15 @@ class SceneApp {
     );
 
     updateWebUI(this.frameSeek.getValue(), maxFrames);
+
+    updateNotificationUI(
+      dt,
+      this.renderer.xr.isPresenting,
+      this.renderer.xr.isPresenting
+        ? (this.renderer.xr.getCamera() as unknown as PerspectiveCamera)
+        : this.camera,
+      this.xrInput.getRightController(),
+    );
 
     if (!this.renderer.xr.isPresenting && resizeRendererToDisplaySize(this.renderer)) {
       this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;

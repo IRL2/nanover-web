@@ -21,7 +21,7 @@ export type TestMessageData = {
 
   state?: SharedMessageRecord;
   frame?: SharedMessageRecord;
-  command?: unknown[];
+  command?: unknown;
 }
 
 export type TestFrame = {

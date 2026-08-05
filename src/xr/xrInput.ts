@@ -108,6 +108,10 @@ export class XRInputManager {
     this.recenter = handler;
   }
 
+  getRightController(): Group<WebXRSpaceEventMap> | undefined {
+    return this.controllers.find((controller) => controller.userData.handedness === 'right');
+  }
+
   collectAvatarComponents(): AvatarComponentsState {
     if (!this.renderer.xr.isPresenting) {
       return [];
@@ -208,6 +212,13 @@ export class XRInputManager {
       const controller = this.renderer.xr.getController(i);
       this.controllers.push(controller);
       this.scene.add(controller);
+
+      controller.addEventListener('connected', (event) => {
+        controller.userData.handedness = event.data.handedness;
+      });
+      controller.addEventListener('disconnected', () => {
+        controller.userData.handedness = undefined;
+      });
 
       const hand = this.renderer.xr.getHand(i);
       hand.add(new OculusHandModel(hand));

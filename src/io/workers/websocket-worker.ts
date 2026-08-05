@@ -21,18 +21,36 @@ export type CommandResponseData = {
   response: unknown;
 }
 
+export type CommandRegisterData = {
+  name: string;
+  arguments?: Record<string, unknown>;
+  label?: string;
+  icon?: string;
+}
+
 export type RecvMessageData = {
   state?: {
     updates?: Record<string, unknown>;
     removals?: string[];
   };
 
-  command?: { request: CommandRequestData };
+  command?:
+    | { request: CommandRequestData }
+    | { request: CommandRequestData; response: unknown }
+    | { register: CommandRegisterData };
+}
+
+export type ServerCommandMessage = {
+  register?: CommandRegisterData;
+  request?: CommandRequestData;
+  response?: unknown;
+  exception?: string;
 }
 
 export type SendMessageData = {
   frame: Partial<TestFrame>;
-  command?: CommandResponseData[];
+  command?: ServerCommandMessage | ServerCommandMessage[];
+  event?: "open" | "close";
 }
 
 let port: MessagePort | null = null;
@@ -59,10 +77,12 @@ function connectToHost(host: string) {
 
   socket.addEventListener("open", (event) => {
     console.log("SOCKET CONNECTED", event);
+    port?.postMessage({ frame: {}, event: "open" } as SendMessageData);
   });
 
   socket.addEventListener("close", (event) => {
     console.log("CLOSE", event);
+    port?.postMessage({ frame: {}, event: "close" } as SendMessageData);
   });
 
   socket.addEventListener("error", (event) => {

@@ -20,9 +20,10 @@ import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from '../
 import { AvatarComponentsState } from '../core/avatar-state';
 import { setForceType } from '../state';
 import {
+  CommandRegisterData,
   CommandRequestData,
-  CommandResponseData,
   SendMessageData as WorkerSendMessageData,
+  ServerCommandMessage,
 } from './workers/websocket-worker';
 import { buildAtomColors } from './trajectory-loader';
 import {
@@ -83,6 +84,7 @@ export class NetworkClient {
   private hasPublishedAvatar = false;
   private hasSentSceneState = false;
   private nextCommandId = 1;
+  private notificationHandler: ((message: string) => void) | null = null;
 
   private readonly boxMatrix = new Matrix3();
   private readonly boxAxisX = new Vector3();
@@ -120,6 +122,22 @@ export class NetworkClient {
     this.hasSentSceneState = false;
     this.localInteractionIds.clear();
     this.worker.postMessage({ host });
+  }
+
+  setNotificationHandler(handler: (message: string) => void) {
+    this.notificationHandler = handler;
+  }
+
+  private get notifyCommandName(): string {
+    return `${this.localAvatarId}/notify`;
+  }
+
+  private registerNotifyCommand() {
+    const register: CommandRegisterData = {
+      name: this.notifyCommandName,
+      arguments: { message: '' },
+    };
+    this.channel.port1.postMessage({ command: { register } });
   }
 
   sendInteractionUpdate(interactionId: string, interaction: InteractionUpdate | null) {
@@ -221,9 +239,14 @@ export class NetworkClient {
 
   private onWorkerMessage = (event: MessageEvent<WorkerSendMessageData>) => {
     const message = event.data;
+
+    if (message.event === 'open') {
+      this.registerNotifyCommand();
+    }
+
     const normalized = normalizeLivePayload(message, this.sharedState);
 
-    this.resolveCommands(message.command ?? []);
+    this.handleCommandMessages(message.command);
 
     if (normalized.elements && normalized.bonds) {
       const colors = buildAtomColors(normalized.elements);
@@ -275,16 +298,48 @@ export class NetworkClient {
     }
   };
 
-  private resolveCommands(commands: CommandResponseData[]) {
-    for (const response of commands) {
-      const resolve = this.pendingCommands.get(response.request.id);
-      if (!resolve) {
+  private handleCommandMessages(command: WorkerSendMessageData['command']) {
+    if (!command) {
+      return;
+    }
+
+    const messages: ServerCommandMessage[] = Array.isArray(command) ? command : [command];
+    for (const message of messages) {
+      if (!message || typeof message !== 'object') {
         continue;
       }
 
-      this.pendingCommands.delete(response.request.id);
-      resolve(response.response);
+      const request = message.request;
+      if (!request) {
+        continue;
+      }
+
+      if ('response' in message || 'exception' in message) {
+        const resolve = this.pendingCommands.get(request.id);
+        if (!resolve) {
+          continue;
+        }
+
+        this.pendingCommands.delete(request.id);
+        resolve(message.response);
+        continue;
+      }
+
+      this.handleIncomingCommandRequest(request);
     }
+  }
+
+  private handleIncomingCommandRequest(request: CommandRequestData) {
+    if (request.name === this.notifyCommandName) {
+      const message = request.arguments?.message;
+      if (typeof message === 'string' && this.notificationHandler) {
+        this.notificationHandler(message);
+      }
+    }
+
+    this.channel.port1.postMessage({
+      command: { request: { id: request.id, name: request.name }, response: {} },
+    });
   }
 
   private applySceneState(scene: {
