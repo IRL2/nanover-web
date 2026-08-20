@@ -40,6 +40,7 @@ import { InteractionManager } from './tools/interaction-manager';
 import { NetworkClient } from './io/network-client';
 import { DEFAULT_TRAJECTORIES, TrajectoryLoader } from './io/trajectory-loader';
 import { XRInputManager } from './xr/xrInput';
+import { PrimitivesRenderer } from './visuals/primitives-renderer';
 
 const CANVAS_ID = 'scene';
 
@@ -69,6 +70,7 @@ class SceneApp {
   private readonly interactionManager: InteractionManager;
   private readonly trajectoryLoader: TrajectoryLoader;
   private readonly networkClient: NetworkClient;
+  private readonly primitivesRenderer: PrimitivesRenderer;
 
   private readonly xrInput: XRInputManager;
   
@@ -132,12 +134,19 @@ class SceneApp {
       updateTrajectoryName: this.updateTrajectoryName,
     });
 
+    this.primitivesRenderer = new PrimitivesRenderer({
+      root: this.calibratedSpace,
+      simulation: this.objects,
+      runCommand: (name, args) => this.networkClient.runCommand(name, args),
+    });
+
     this.networkClient = new NetworkClient({
       objects: this.objects,
       cameraControls: this.cameraControls,
       liveRenderer: this.live,
       avatarRendering: this.avatarRendering,
       interactionManager: this.interactionManager,
+      primitivesRenderer: this.primitivesRenderer,
     });
 
     setupNotificationUI(threeScene);
@@ -343,12 +352,14 @@ class SceneApp {
 
     this.stats.begin();
 
+    const activeCamera = this.renderer.xr.isPresenting
+      ? (this.renderer.xr.getCamera() as unknown as PerspectiveCamera)
+      : this.camera;
+
     updateXRUI(
       dt,
       this.renderer.xr.isPresenting,
-      this.renderer.xr.isPresenting
-        ? (this.renderer.xr.getCamera() as unknown as PerspectiveCamera)
-        : this.camera,
+      activeCamera,
       this.panelRot,
       this.frameSeek.getValue(),
       maxFrames,
@@ -360,11 +371,11 @@ class SceneApp {
     updateNotificationUI(
       dt,
       this.renderer.xr.isPresenting,
-      this.renderer.xr.isPresenting
-        ? (this.renderer.xr.getCamera() as unknown as PerspectiveCamera)
-        : this.camera,
+      activeCamera,
       this.xrInput.getRightController(),
     );
+
+    this.primitivesRenderer.update(activeCamera);
 
     if (!this.renderer.xr.isPresenting && resizeRendererToDisplaySize(this.renderer)) {
       this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;
@@ -373,7 +384,7 @@ class SceneApp {
 
     this.cameraControls.update();
     this.xrInput.update(controlPanel);
-    this.networkClient.updateLocalState(this.xrInput.collectAvatarComponents());
+    this.networkClient.updateLocalState(this.xrInput.collectAvatarComponents(), this.xrInput.collectCursors());
     this.renderer.render(this.scene, this.camera);
     this.stats.end();
   };

@@ -22,6 +22,7 @@ import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from '../tools/interaction-manager';
 import { AvatarComponentsState } from '../core/avatar-state';
+import { CursorState } from '../core/primitives';
 import { ColocationManager } from './colocation';
 import { SqueezeManipulation } from './manipulation';
 import {
@@ -80,6 +81,7 @@ export class XRInputManager {
   private readonly calibratedInverse = new Matrix4();
   private readonly componentMatrix = new Matrix4();
   private readonly tempPosA = new Vector3();
+  private readonly tempPosB = new Vector3();
   private readonly tempQuat = new Quaternion();
   private readonly tempScale = new Vector3();
   private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
@@ -110,6 +112,129 @@ export class XRInputManager {
 
   getRightController(): Group<WebXRSpaceEventMap> | undefined {
     return this.controllers.find((controller) => controller.userData.handedness === 'right');
+  }
+
+  private setHeldButton(group: Group<WebXRSpaceEventMap>, button: string, held: boolean) {
+    const heldButtons = group.userData.heldButtons as Set<string> | undefined;
+    if (!heldButtons) {
+      return;
+    }
+    if (held) {
+      heldButtons.add(button);
+    } else {
+      heldButtons.delete(button);
+    }
+  }
+
+  private updateHandPinch(hand: Group<WebXRSpaceEventMap>) {
+    const joints = (hand as unknown as { joints?: Record<string, Object3D | undefined> }).joints;
+    if (!joints) {
+      return;
+    }
+
+    const thumbTip = joints['thumb-tip'];
+    const indexTip = joints['index-finger-tip'];
+    if (!thumbTip || !indexTip) {
+      return;
+    }
+
+    thumbTip.getWorldPosition(this.tempPosA);
+    indexTip.getWorldPosition(this.tempPosB);
+    const pinching = this.tempPosA.distanceTo(this.tempPosB) < 0.02;
+
+    const heldButtons = hand.userData.heldButtons as Set<string> | undefined;
+    if (!heldButtons) {
+      return;
+    }
+
+    const wasPinching = heldButtons.has('pinch');
+    if (pinching && !wasPinching) {
+      heldButtons.add('pinch');
+      heldButtons.add('primary');
+      heldButtons.add('trigger');
+    } else if (!pinching && wasPinching) {
+      heldButtons.delete('pinch');
+      heldButtons.delete('primary');
+      heldButtons.delete('trigger');
+    }
+  }
+
+  collectCursors(): CursorState[] {
+    const cursors: CursorState[] = [];
+    if (!this.renderer.xr.isPresenting) {
+      return cursors;
+    }
+
+    const session = this.renderer.xr.getSession();
+
+    this.colocation.calibratedSpace.updateWorldMatrix(true, false);
+    this.calibratedInverse.copy(this.colocation.calibratedSpace.matrixWorld).invert();
+
+    for (let i = 0; i < this.controllers.length; i += 1) {
+      const controller = this.controllers[i];
+      const hand = this.hands[i];
+
+      const handedness = controller.userData.handedness ?? hand?.userData.handedness;
+      if (handedness !== 'left' && handedness !== 'right') {
+        continue;
+      }
+
+      const buttons = new Set<string>();
+      const controllerButtons = controller.userData.heldButtons as Set<string> | undefined;
+      if (controllerButtons) {
+        for (const button of controllerButtons) {
+          buttons.add(button);
+        }
+      }
+
+      if (hand) {
+        this.updateHandPinch(hand);
+        const handButtons = hand.userData.heldButtons as Set<string> | undefined;
+        if (handButtons) {
+          for (const button of handButtons) {
+            if (button !== 'pinch') {
+              buttons.add(button);
+            }
+          }
+        }
+      }
+
+      controller.updateWorldMatrix(true, false);
+      this.componentMatrix.multiplyMatrices(this.calibratedInverse, controller.matrixWorld);
+      this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
+
+      cursors.push({
+        handedness,
+        position: [this.tempPosA.x, this.tempPosA.y, this.tempPosA.z],
+        rotation: [this.tempQuat.x, this.tempQuat.y, this.tempQuat.z, this.tempQuat.w],
+        heldbuttons: [...buttons],
+        joystick: this.readJoystick(session, handedness),
+      });
+    }
+
+    return cursors;
+  }
+
+  private readJoystick(session: XRSession | null, handedness: 'left' | 'right'): [number, number] {
+    if (!session) {
+      return [0, 0];
+    }
+
+    for (const source of session.inputSources) {
+      if (source.handedness !== handedness || !source.gamepad) {
+        continue;
+      }
+
+      const axes = source.gamepad.axes;
+      if (axes.length > 3) {
+        return [axes[2], axes[3]];
+      }
+      if (axes.length > 1) {
+        return [axes[0], axes[1]];
+      }
+    }
+
+    return [0, 0];
   }
 
   collectAvatarComponents(): AvatarComponentsState {
@@ -215,21 +340,47 @@ export class XRInputManager {
 
       controller.addEventListener('connected', (event) => {
         controller.userData.handedness = event.data.handedness;
+        controller.userData.heldButtons = new Set<string>();
       });
       controller.addEventListener('disconnected', () => {
         controller.userData.handedness = undefined;
+        controller.userData.heldButtons = undefined;
       });
+
+      controller.addEventListener('selectstart', () => this.setHeldButton(controller, 'primary', true));
+      controller.addEventListener('selectend', () => this.setHeldButton(controller, 'primary', false));
+      controller.addEventListener('selectstart', () => this.setHeldButton(controller, 'trigger', true));
+      controller.addEventListener('selectend', () => this.setHeldButton(controller, 'trigger', false));
 
       const hand = this.renderer.xr.getHand(i);
       hand.add(new OculusHandModel(hand));
       this.hands.push(hand);
       this.scene.add(hand);
 
+      hand.addEventListener('connected', (event) => {
+        hand.userData.handedness = event.data.handedness;
+        hand.userData.heldButtons = new Set<string>();
+      });
+      hand.addEventListener('disconnected', () => {
+        hand.userData.handedness = undefined;
+        hand.userData.heldButtons = undefined;
+      });
+      hand.addEventListener('selectstart', () => this.setHeldButton(hand, 'primary', true));
+      hand.addEventListener('selectend', () => this.setHeldButton(hand, 'primary', false));
+
       this.addClicker(controller);
       this.addClicker(hand);
 
-      controller.addEventListener('squeezestart', () => this.manipulation.startGrip(controller));
-      controller.addEventListener('squeezeend', () => this.manipulation.endGrip(controller));
+      controller.addEventListener('squeezestart', () => {
+        this.manipulation.startGrip(controller);
+        this.setHeldButton(controller, 'grip', true);
+        this.setHeldButton(controller, 'secondary', true);
+      });
+      controller.addEventListener('squeezeend', () => {
+        this.manipulation.endGrip(controller);
+        this.setHeldButton(controller, 'grip', false);
+        this.setHeldButton(controller, 'secondary', false);
+      });
 
       this.setupRayPointer(controller, i);
     }

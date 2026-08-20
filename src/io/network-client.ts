@@ -35,6 +35,8 @@ import {
   updateSceneMatrixWorld,
   writeSceneState,
 } from '../core/scene-transform';
+import { CursorState } from '../core/primitives';
+import { PrimitivesRenderer } from '../visuals/primitives-renderer';
 
 interface NetworkClientOptions {
   objects: Object3D;
@@ -42,6 +44,7 @@ interface NetworkClientOptions {
   liveRenderer: NaiveRenderer;
   avatarRendering: AvatarRendering;
   interactionManager: InteractionManager;
+  primitivesRenderer: PrimitivesRenderer;
 }
 
 type SharedStateUpdate = {
@@ -63,6 +66,7 @@ export class NetworkClient {
   private readonly liveRenderer: NaiveRenderer;
   private readonly avatarRendering: AvatarRendering;
   private readonly interactionManager: InteractionManager;
+  private readonly primitivesRenderer: PrimitivesRenderer;
   private readonly worker: Worker;
   private readonly channel = new MessageChannel();
 
@@ -93,6 +97,8 @@ export class NetworkClient {
   private notificationHandler: ((message: string) => void) | null = null;
   private userCommandsHandler: ((commands: UserCommand[]) => void) | null = null;
   private userCommands: UserCommand[] = [];
+  private readonly publishedCursorKeys = new Set<string>();
+  private readonly lastSentCursors = new Map<string, string>();
 
   private readonly boxMatrix = new Matrix3();
   private readonly boxAxisX = new Vector3();
@@ -108,6 +114,7 @@ export class NetworkClient {
     this.liveRenderer = options.liveRenderer;
     this.avatarRendering = options.avatarRendering;
     this.interactionManager = options.interactionManager;
+    this.primitivesRenderer = options.primitivesRenderer;
 
     this.boxEdges.visible = false;
     this.boxEdges.frustumCulled = false;
@@ -130,6 +137,9 @@ export class NetworkClient {
     this.hasSentSceneState = false;
     this.localInteractionIds.clear();
     this.setUserCommands([]);
+    this.primitivesRenderer.clear();
+    this.publishedCursorKeys.clear();
+    this.lastSentCursors.clear();
     this.worker.postMessage({ host });
   }
 
@@ -178,7 +188,7 @@ export class NetworkClient {
     this.channel.port1.postMessage({ state });
   }
 
-  updateLocalState(avatarComponents: AvatarComponentsState) {
+  updateLocalState(avatarComponents: AvatarComponentsState, cursors: CursorState[] = []) {
     const updates: Record<string, unknown> = {};
     const removals: string[] = [];
 
@@ -202,6 +212,39 @@ export class NetworkClient {
     } else if (this.hasPublishedAvatar) {
       removals.push(`avatar.${this.localAvatarId}`);
       this.hasPublishedAvatar = false;
+    }
+
+    const nextCursorKeys = new Set<string>();
+    for (const cursor of cursors) {
+      const key = `cursor.${this.localAvatarId}.${cursor.handedness}`;
+      nextCursorKeys.add(key);
+
+      const value = {
+        ownerid: this.localAvatarId,
+        position: cursor.position,
+        rotation: cursor.rotation,
+        heldbuttons: cursor.heldbuttons,
+        joystick: cursor.joystick,
+      };
+
+      const serialized = JSON.stringify(value);
+      if (this.lastSentCursors.get(key) === serialized) {
+        continue;
+      }
+
+      this.lastSentCursors.set(key, serialized);
+      updates[key] = value;
+    }
+
+    for (const key of this.publishedCursorKeys) {
+      if (!nextCursorKeys.has(key)) {
+        removals.push(key);
+        this.lastSentCursors.delete(key);
+      }
+    }
+    this.publishedCursorKeys.clear();
+    for (const key of nextCursorKeys) {
+      this.publishedCursorKeys.add(key);
     }
 
     if (Object.keys(updates).length === 0 && removals.length === 0) {
@@ -261,6 +304,14 @@ export class NetworkClient {
       });
     } else if (message.event === 'close') {
       this.setUserCommands([]);
+      this.primitivesRenderer.clear();
+      this.publishedCursorKeys.clear();
+      this.lastSentCursors.clear();
+    }
+
+    const primitivesDelta = message.frame.state as SharedStateUpdate | undefined;
+    if (primitivesDelta && (primitivesDelta.updates || primitivesDelta.removals)) {
+      this.primitivesRenderer.applyStateDelta(primitivesDelta.updates, primitivesDelta.removals);
     }
 
     const normalized = normalizeLivePayload(message, this.sharedState);
