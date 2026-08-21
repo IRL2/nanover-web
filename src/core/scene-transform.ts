@@ -24,7 +24,7 @@ export function writeSceneState(objects: Object3D, target: SceneStateTuple): Sce
   target[4] = objects.quaternion.y;
   target[5] = objects.quaternion.z;
   target[6] = objects.quaternion.w;
-  target[7] = -objects.scale.x;
+  target[7] = objects.scale.x;
   target[8] = objects.scale.y;
   target[9] = objects.scale.z;
   return target;
@@ -49,7 +49,7 @@ export function sceneStateChanged(a: SceneStateTuple, b: SceneStateTuple, epsilo
 export function applyLiveSceneTransform(objects: Object3D, scene: LiveSceneTransform) {
   objects.position.fromArray(scene.position);
   objects.quaternion.fromArray(scene.rotation);
-  objects.scale.set(-scene.scale[0], scene.scale[1], scene.scale[2]);
+  objects.scale.set(scene.scale[0], scene.scale[1], scene.scale[2]);
 }
 
 export function updateSceneMatrixWorld(objects: Object3D): Matrix4 {

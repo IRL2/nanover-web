@@ -87,8 +87,8 @@ export class NetworkClient {
   private readonly localAvatarColor = this.createLocalAvatarColor();
   private readonly sceneCenter = new Vector3(0.5, 0.5, 0.5);
   private readonly sceneCenterWorld = new Vector3();
-  private readonly currentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, -1, 1, 1];
-  private readonly lastSentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, -1, 1, 1];
+  private readonly currentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1];
+  private readonly lastSentSceneState: SceneStateTuple = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1];
   private readonly localInteractionIds = new Set<string>();
   private remoteInteractions: LiveInteractionState[] = [];
   private hasPublishedAvatar = false;
@@ -134,7 +134,8 @@ export class NetworkClient {
   }
 
   connect(host: string) {
-    this.hasSentSceneState = false;
+    writeSceneState(this.objects, this.lastSentSceneState);
+    this.hasSentSceneState = true;
     this.localInteractionIds.clear();
     this.setUserCommands([]);
     this.primitivesRenderer.clear();
@@ -502,12 +503,30 @@ export class NetworkClient {
   }
 
   private createLocalAvatarId(): string {
-    const randomUUID = globalThis.crypto?.randomUUID;
-    if (typeof randomUUID === 'function') {
-      return `web-${randomUUID.call(globalThis.crypto)}`;
+    // stable across reloads so the client's "<id>/notify" command registration is
+    // re-registered (overwritten) on reconnect instead of accumulating stale entries
+    // on the server, which notify_all would otherwise try to invoke after disconnect
+    try {
+      const stored = window.localStorage.getItem('nanover-avatar-id');
+      if (stored) {
+        return stored;
+      }
+    } catch {
+      // storage unavailable
     }
 
-    return `web-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    const randomUUID = globalThis.crypto?.randomUUID;
+    const id = typeof randomUUID === 'function'
+      ? `web-${randomUUID.call(globalThis.crypto)}`
+      : `web-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+
+    try {
+      window.localStorage.setItem('nanover-avatar-id', id);
+    } catch {
+      // storage unavailable
+    }
+
+    return id;
   }
 
   private createLocalAvatarColor(): [number, number, number] {

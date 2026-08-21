@@ -196,7 +196,7 @@ class SceneApp {
       document.body.appendChild(this.stats.dom);
     }
 
-    document.body.appendChild(XRButton.createButton(this.renderer, { optionalFeatures: ['anchors', 'hand-tracking'] }));
+    document.body.appendChild(XRButton.createButton(this.renderer, { optionalFeatures: ['anchors'] }));
 
     this.setupDebugGui(showDebug);
 

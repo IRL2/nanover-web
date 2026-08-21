@@ -390,7 +390,7 @@ export class PrimitivesRenderer {
     if (text.text !== data.text) {
       text.text = data.text;
     }
-    text.fontSize = Math.max(1e-4, data.size);
+    text.fontSize = Math.max(1e-4, data.size * 5);
     text.color = this.segmentColor.setRGB(data.color[0], data.color[1], data.color[2]).getHex();
     text.fillOpacity = data.color[3];
     text.position.fromArray(data.position);

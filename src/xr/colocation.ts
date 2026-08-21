@@ -76,7 +76,6 @@ export class ColocationManager {
       pose.transform.orientation.z,
       pose.transform.orientation.w,
     );
-    this.calibratedSpace.scale.x = -1;
   }
 
   private onSessionSelect = (event: XRInputSourceEvent) => {

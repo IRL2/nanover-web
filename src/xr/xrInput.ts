@@ -18,7 +18,6 @@ import {
   WebXRSpaceEventMap,
 } from 'three';
 import { forceScale, setForceScale } from '../state';
-import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { XRControllerModelFactory } from 'three/examples/jsm/webxr/XRControllerModelFactory.js';
 import { InteractionManager } from '../tools/interaction-manager';
 import { AvatarComponentsState } from '../core/avatar-state';
@@ -54,13 +53,13 @@ interface XRInputOptions {
 
 export class XRInputManager {
   readonly controllers: Group<WebXRSpaceEventMap>[] = [];
-  readonly hands: Group<WebXRSpaceEventMap>[] = [];
   readonly colocation: ColocationManager;
   readonly manipulation: SqueezeManipulation;
 
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
+  private readonly objects: Object3D;
 
   private readonly panelRot: Object3D;
   private readonly interactionManager: InteractionManager;
@@ -81,15 +80,18 @@ export class XRInputManager {
   private readonly calibratedInverse = new Matrix4();
   private readonly componentMatrix = new Matrix4();
   private readonly tempPosA = new Vector3();
-  private readonly tempPosB = new Vector3();
   private readonly tempQuat = new Quaternion();
   private readonly tempScale = new Vector3();
+  private readonly tempMatrixA = new Matrix4();
+  private readonly tempMatrixB = new Matrix4();
+  private readonly mirrorMatrix = new Matrix4().makeScale(-1, 1, 1);
   private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
 
   constructor(options: XRInputOptions) {
     this.renderer = options.renderer;
     this.scene = options.scene;
     this.camera = options.camera;
+    this.objects = options.objects;
     this.panelRot = options.panelRot;
     this.interactionManager = options.interactionManager;
 
@@ -126,39 +128,6 @@ export class XRInputManager {
     }
   }
 
-  private updateHandPinch(hand: Group<WebXRSpaceEventMap>) {
-    const joints = (hand as unknown as { joints?: Record<string, Object3D | undefined> }).joints;
-    if (!joints) {
-      return;
-    }
-
-    const thumbTip = joints['thumb-tip'];
-    const indexTip = joints['index-finger-tip'];
-    if (!thumbTip || !indexTip) {
-      return;
-    }
-
-    thumbTip.getWorldPosition(this.tempPosA);
-    indexTip.getWorldPosition(this.tempPosB);
-    const pinching = this.tempPosA.distanceTo(this.tempPosB) < 0.02;
-
-    const heldButtons = hand.userData.heldButtons as Set<string> | undefined;
-    if (!heldButtons) {
-      return;
-    }
-
-    const wasPinching = heldButtons.has('pinch');
-    if (pinching && !wasPinching) {
-      heldButtons.add('pinch');
-      heldButtons.add('primary');
-      heldButtons.add('trigger');
-    } else if (!pinching && wasPinching) {
-      heldButtons.delete('pinch');
-      heldButtons.delete('primary');
-      heldButtons.delete('trigger');
-    }
-  }
-
   collectCursors(): CursorState[] {
     const cursors: CursorState[] = [];
     if (!this.renderer.xr.isPresenting) {
@@ -172,35 +141,27 @@ export class XRInputManager {
 
     for (let i = 0; i < this.controllers.length; i += 1) {
       const controller = this.controllers[i];
-      const hand = this.hands[i];
 
-      const handedness = controller.userData.handedness ?? hand?.userData.handedness;
+      const handedness = controller.userData.handedness;
       if (handedness !== 'left' && handedness !== 'right') {
         continue;
       }
 
       const buttons = new Set<string>();
-      const controllerButtons = controller.userData.heldButtons as Set<string> | undefined;
-      if (controllerButtons) {
-        for (const button of controllerButtons) {
-          buttons.add(button);
-        }
-      }
-
-      if (hand) {
-        this.updateHandPinch(hand);
-        const handButtons = hand.userData.heldButtons as Set<string> | undefined;
-        if (handButtons) {
-          for (const button of handButtons) {
-            if (button !== 'pinch') {
-              buttons.add(button);
-            }
+      const hasGamepad = this.readControllerButtons(session, handedness, buttons);
+      if (!hasGamepad) {
+        const controllerButtons = controller.userData.heldButtons as Set<string> | undefined;
+        if (controllerButtons) {
+          for (const button of controllerButtons) {
+            buttons.add(button);
           }
         }
       }
 
-      controller.updateWorldMatrix(true, false);
-      this.componentMatrix.multiplyMatrices(this.calibratedInverse, controller.matrixWorld);
+      const cursorObject: Object3D = this.controllerTips.get(controller) ?? controller;
+      cursorObject.updateWorldMatrix(true, false);
+      this.componentMatrix.multiplyMatrices(this.calibratedInverse, cursorObject.matrixWorld);
+      this.applySimulationMirror(this.componentMatrix);
       this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
 
       cursors.push({
@@ -213,6 +174,20 @@ export class XRInputManager {
     }
 
     return cursors;
+  }
+
+  // the shared transform hierarchy is rooted at transform.simulation, which the
+  // server keeps mirrored in X relative to the scene pose; this client renders the
+  // scene unmirrored, so outgoing cursor poses are mirrored about the simulation
+  // frame to keep server-side intersection and grabbing aligned with rendered positions
+  private applySimulationMirror(matrix: Matrix4) {
+    this.objects.updateMatrix();
+    if (Math.abs(this.objects.matrix.determinant()) < 1e-8) {
+      return;
+    }
+    this.tempMatrixB.copy(this.objects.matrix).invert();
+    this.tempMatrixA.copy(this.objects.matrix).multiply(this.mirrorMatrix).multiply(this.tempMatrixB);
+    matrix.premultiply(this.tempMatrixA);
   }
 
   private readJoystick(session: XRSession | null, handedness: 'left' | 'right'): [number, number] {
@@ -235,6 +210,36 @@ export class XRInputManager {
     }
 
     return [0, 0];
+  }
+
+  private readControllerButtons(session: XRSession | null, handedness: 'left' | 'right', buttons: Set<string>): boolean {
+    if (!session) {
+      return false;
+    }
+
+    for (const source of session.inputSources) {
+      if (source.handedness !== handedness || !source.gamepad) {
+        continue;
+      }
+
+      // xr-standard gamepad mapping: 0=trigger, 1=squeeze, 4=A/X, 5=B/Y
+      const gamepadButtons = source.gamepad.buttons;
+      if (gamepadButtons[0]?.pressed) {
+        buttons.add('trigger');
+      }
+      if (gamepadButtons[1]?.pressed) {
+        buttons.add('grip');
+      }
+      if (gamepadButtons[4]?.pressed) {
+        buttons.add('primary');
+      }
+      if (gamepadButtons[5]?.pressed) {
+        buttons.add('secondary');
+      }
+      return true;
+    }
+
+    return false;
   }
 
   collectAvatarComponents(): AvatarComponentsState {
@@ -276,9 +281,6 @@ export class XRInputManager {
 
     for (const controller of this.controllers) {
       this.updateUIButtonHover(controller);
-    }
-    for (const hand of this.hands) {
-      this.updateUIButtonHover(hand);
     }
 
     this.manipulation.update();
@@ -347,29 +349,16 @@ export class XRInputManager {
         controller.userData.heldButtons = undefined;
       });
 
-      controller.addEventListener('selectstart', () => this.setHeldButton(controller, 'primary', true));
-      controller.addEventListener('selectend', () => this.setHeldButton(controller, 'primary', false));
-      controller.addEventListener('selectstart', () => this.setHeldButton(controller, 'trigger', true));
-      controller.addEventListener('selectend', () => this.setHeldButton(controller, 'trigger', false));
-
-      const hand = this.renderer.xr.getHand(i);
-      hand.add(new OculusHandModel(hand));
-      this.hands.push(hand);
-      this.scene.add(hand);
-
-      hand.addEventListener('connected', (event) => {
-        hand.userData.handedness = event.data.handedness;
-        hand.userData.heldButtons = new Set<string>();
+      controller.addEventListener('selectstart', () => {
+        this.setHeldButton(controller, 'primary', true);
+        this.setHeldButton(controller, 'trigger', true);
       });
-      hand.addEventListener('disconnected', () => {
-        hand.userData.handedness = undefined;
-        hand.userData.heldButtons = undefined;
+      controller.addEventListener('selectend', () => {
+        this.setHeldButton(controller, 'primary', false);
+        this.setHeldButton(controller, 'trigger', false);
       });
-      hand.addEventListener('selectstart', () => this.setHeldButton(hand, 'primary', true));
-      hand.addEventListener('selectend', () => this.setHeldButton(hand, 'primary', false));
 
       this.addClicker(controller);
-      this.addClicker(hand);
 
       controller.addEventListener('squeezestart', () => {
         this.manipulation.startGrip(controller);
