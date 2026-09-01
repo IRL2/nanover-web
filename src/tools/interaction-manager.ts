@@ -24,6 +24,7 @@ export interface InteractionUpdate {
   interaction_type?: string;
   scale?: number;
   mass_weighted?: boolean;
+  properties?: Record<string, unknown>;
 }
 
 type InteractionSender = (interactionId: string, interaction: InteractionUpdate | null) => void;
@@ -73,6 +74,7 @@ export class InteractionManager {
   private particleResidues: Int32Array | null = null;
   private interactionIdCounter = 0;
   private sendInteraction: InteractionSender = () => {};
+  private ownerId = '';
 
   // --- highlight state ---
   private highlightRenderer: NaiveRenderer | null = null;
@@ -99,6 +101,21 @@ export class InteractionManager {
 
   setInteractionSender(sender: InteractionSender) {
     this.sendInteraction = sender;
+  }
+
+  setOwnerId(ownerId: string) {
+    this.ownerId = ownerId;
+  }
+
+  private interactionProperties(controller: Group<WebXRSpaceEventMap>): Record<string, unknown> | undefined {
+    const handedness = controller.userData.handedness;
+    if (!this.ownerId || (handedness !== 'left' && handedness !== 'right')) {
+      return undefined;
+    }
+    return {
+      'owner.id': this.ownerId,
+      label: `hand.${handedness}`,
+    };
   }
 
   setCurrentPositions(positions: Float32Array | null) {
@@ -176,6 +193,7 @@ export class InteractionManager {
       particles,
       interaction_type: forceType,
       scale: forceScale,
+      properties: this.interactionProperties(controller),
     });
   }
 
@@ -198,6 +216,7 @@ export class InteractionManager {
       particles: active.particles,
       interaction_type: forceType,
       scale: forceScale,
+      properties: this.interactionProperties(controller),
     });
 
     const atomIndex = active.particles[0];

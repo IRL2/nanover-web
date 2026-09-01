@@ -69,6 +69,7 @@ interface SpriteEntry {
   mesh: Mesh;
   material: MeshBasicMaterial;
   textureKey: string;
+  size: number;
 }
 
 const MAX_LINE_INSTANCES = 8192;
@@ -390,7 +391,7 @@ export class PrimitivesRenderer {
     if (text.text !== data.text) {
       text.text = data.text;
     }
-    text.fontSize = Math.max(1e-4, data.size * 5);
+    text.fontSize = Math.max(1e-4, data.size * 4);
     text.color = this.segmentColor.setRGB(data.color[0], data.color[1], data.color[2]).getHex();
     text.fillOpacity = data.color[3];
     text.position.fromArray(data.position);
@@ -419,7 +420,7 @@ export class PrimitivesRenderer {
       });
       const mesh = new Mesh(this.planeGeometry, material);
       mesh.frustumCulled = false;
-      entry = { mesh, material, textureKey: '' };
+      entry = { mesh, material, textureKey: '', size: 1 };
       this.sprites.set(key, entry);
     }
 
@@ -430,11 +431,18 @@ export class PrimitivesRenderer {
       entry.material.needsUpdate = true;
     }
 
+    entry.size = Math.max(1e-6, data.size);
     entry.mesh.position.fromArray(data.position);
-    entry.mesh.scale.setScalar(Math.max(1e-6, data.size));
+    this.applySpriteScale(entry);
     entry.material.color.setRGB(data.color[0], data.color[1], data.color[2]);
     entry.material.opacity = data.color[3];
     this.reparent(entry.mesh, this.resolveParent(data.parent));
+  }
+
+  private applySpriteScale(entry: SpriteEntry) {
+    const image = entry.material.map?.image as { width?: number; height?: number } | undefined;
+    const aspect = image?.width && image?.height ? image.width / image.height : 1;
+    entry.mesh.scale.set(entry.size * aspect, entry.size, 1);
   }
 
   private removeSprite(key: string) {
@@ -506,6 +514,7 @@ export class PrimitivesRenderer {
       if (entry.textureKey === textureKey) {
         entry.material.map = texture;
         entry.material.needsUpdate = true;
+        this.applySpriteScale(entry);
       }
     }
   }

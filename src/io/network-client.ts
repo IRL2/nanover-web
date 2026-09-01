@@ -115,6 +115,7 @@ export class NetworkClient {
     this.avatarRendering = options.avatarRendering;
     this.interactionManager = options.interactionManager;
     this.primitivesRenderer = options.primitivesRenderer;
+    this.interactionManager.setOwnerId(this.localAvatarId);
 
     this.boxEdges.visible = false;
     this.boxEdges.frustumCulled = false;
@@ -177,6 +178,7 @@ export class NetworkClient {
       : {
           updates: {
             [`interaction.${interactionId}`]: {
+              ...(interaction.properties ?? {}),
               position: interaction.position,
               particles: interaction.particles,
               interaction_type: interaction.interaction_type ?? 'spring',

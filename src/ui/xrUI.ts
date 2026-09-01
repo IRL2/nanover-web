@@ -3,6 +3,7 @@ import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion } from
 import { Controller } from 'lil-gui';
 import twemoji from '@twemoji/api';
 import { setupXRPlaybackUI } from './xrPlaybackUI';
+import { showNotification } from './xrNotification';
 import type { UserCommand } from '../io/network-client';
 import {
   forceType,
@@ -374,6 +375,19 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
     });
     userCommandsPanel.add(userCommandsRow);
 
+    async function runUserCommand(name: string) {
+        showNotification(`Run ${name}`);
+        const response = await context.runCommand(name);
+        if (response && typeof response === 'object') {
+            const result = (response as Record<string, unknown>).result;
+            if (result !== undefined) {
+                showNotification(`${name}: ${String(result)}`);
+            } else if (Object.keys(response).length > 0) {
+                showNotification(`Completed ${name}`);
+            }
+        }
+    }
+
     renderUserCommands = (commands) => {
         for (const button of userCommandButtons) {
             const buttonIndex = uikitButtons.indexOf(button);
@@ -395,7 +409,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
             const button = createUIButton(
                 '',
                 0x546E7A,
-                () => { void context.runCommand(command.name); },
+                () => { void runUserCommand(command.name); },
             );
             button.container.setProperties({ width: 12, height: 12 } as any);
 
