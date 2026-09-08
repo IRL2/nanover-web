@@ -17,13 +17,14 @@ import {
 //
 //  - alpha helices -> one rigid cylinder ("pipe") per helix, placed along the
 //    fitted helix axis (a single instanced cylinder, updated by matrix only)
-//  - beta strands  -> one uniform extruded plate ("arrow") per strand: a single
-//    continuous geometry swept along the smoothed strand path with evenly
-//    resampled stations, flaring into an arrow head at the C-terminal end
+//  - beta strands  -> one uniform extruded plate ("arrow") per strand: a
+//    centripetal Catmull-Rom curve through the strand's alpha carbons, swept
+//    with a constant rectangular cross section that flares into a distinct
+//    arrow head of fixed physical length at the C-terminal end
 //  - loops/coils   -> a thin constant-radius tube following the alpha carbon
-//    hermite spline, connecting pipes and plates (drawn along the whole
-//    backbone; inside helices it is blended onto the pipe axis and hidden
-//    inside the pipe/plate volumes)
+//    spline. The tube runs underneath helix pipes (blended onto the pipe axis,
+//    hidden inside the pipe) but stops at the base of a plate and resumes at
+//    the arrow tip, so it never shows through the plates.
 //
 // Unlike the spline CartoonRenderer, no cross sections morph between residues:
 // pipes are perfectly rigid cylinders, plates are uniform slabs. Elements grow
@@ -47,13 +48,16 @@ export interface SimpleCartoonRendererOptions {
   headLength?: number;
   // length of the arrow head past the last strand residue (nm)
   arrowLength?: number;
+  // minimum number of residues for a helix pipe / beta plate
+  minHelixRun?: number;
+  minSheetRun?: number;
   // lengthwise subdivisions of each tube segment
   tubeSegments?: number;
   // radial subdivisions of the tube cylinder
   tubeSides?: number;
   // radial subdivisions of helix pipes
   pipeSides?: number;
-  // path stations per hermite segment when extruding plates
+  // path stations per residue when extruding plates
   stationsPerSegment?: number;
   // seconds between DSSP recalculations
   dsspInterval?: number;
@@ -71,10 +75,12 @@ const DEFAULT_OPTIONS: Required<SimpleCartoonRendererOptions> = {
   arrowExtra: 0.9,
   headLength: 0.55,
   arrowLength: 0.25,
+  minHelixRun: 2,
+  minSheetRun: 2,
   tubeSegments: 16,
   tubeSides: 12,
   pipeSides: 16,
-  stationsPerSegment: 4,
+  stationsPerSegment: 6,
   dsspInterval: 1.0,
   fadeSpeed: 0.5,
 };
@@ -176,6 +182,8 @@ interface Run {
   mesh: THREE.Mesh | null;
   geometry: THREE.BufferGeometry | null;
   stations: number;
+  curvePoints: THREE.Vector3[] | null;
+  binormals: Float32Array | null;
 }
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -185,23 +193,17 @@ const scratchPosition = new THREE.Vector3();
 const scratchDirection = new THREE.Vector3();
 const scratchScale = new THREE.Vector3();
 const scratchColor = new THREE.Color();
+const scratchPointA = new THREE.Vector3();
+const scratchPointB = new THREE.Vector3();
+const scratchTangent = new THREE.Vector3();
+const scratchBinormal = new THREE.Vector3();
+const scratchNormal = new THREE.Vector3();
 
 function moveTowards(current: number, target: number, maxDelta: number): number {
   if (Math.abs(target - current) <= maxDelta) {
     return target;
   }
   return current + Math.sign(target - current) * maxDelta;
-}
-
-function hermitePoint(t: number, p1: number, m1: number, p2: number, m2: number): number {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return (2 * t3 - 3 * t2 + 1) * p1 + (t3 - 2 * t2 + t) * m1 + (-2 * t3 + 3 * t2) * p2 + (t3 - t2) * m2;
-}
-
-function hermiteTangent(t: number, p1: number, m1: number, p2: number, m2: number): number {
-  const t2 = t * t;
-  return (6 * t2 - 6 * t) * p1 + (3 * t2 - 4 * t + 1) * m1 + (-6 * t2 + 6 * t) * p2 + (3 * t2 - 2 * t) * m2;
 }
 
 export class SimpleCartoonRenderer extends THREE.Object3D {
@@ -221,6 +223,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   // beta plates (one extruded arrow geometry per strand run)
   private readonly platesGroup = new THREE.Group();
   private readonly plateMaterial: THREE.MeshStandardMaterial;
+  private readonly plateCurve = new THREE.CatmullRomCurve3([], false, "centripetal", 0.5);
 
   private sequences: Sequence[] = [];
   private caIndices = new Int32Array(0);
@@ -238,6 +241,10 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   private axisNormal = new Float32Array(0);
 
   private runs = new Map<string, Run>();
+  // runs in iteration order, plus the run index covering each vertex with an
+  // active plate (used to route the loop tube around plates)
+  private readonly runArray: Run[] = [];
+  private vertexSheetRun = new Int32Array(0);
 
   private lastPositions: ArrayLike<number> | null = null;
 
@@ -303,7 +310,12 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.add(this.pipeMesh);
 
     this.plateMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(...(SS_COLORS[SS_SHEET] ?? SS_WHITE)),
+      color: new THREE.Color().setRGB(
+        (SS_COLORS[SS_SHEET] ?? SS_WHITE)[0],
+        (SS_COLORS[SS_SHEET] ?? SS_WHITE)[1],
+        (SS_COLORS[SS_SHEET] ?? SS_WHITE)[2],
+        THREE.SRGBColorSpace,
+      ),
       roughness: 0.55,
       metalness: 0,
       flatShading: true,
@@ -357,6 +369,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.axisProj = new Float32Array(n3);
     this.axisDir = new Float32Array(n3);
     this.axisNormal = new Float32Array(n3);
+    this.vertexSheetRun = new Int32Array(this.vertexCount);
 
     this.dssp.build(polypeptides.residueSequences, atomNames, atomResidues);
     this.dsspTimer = Infinity;
@@ -439,6 +452,8 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       run.geometry.dispose();
       run.geometry = null;
     }
+    run.curvePoints = null;
+    run.binormals = null;
   }
 
   private updateRuns(assignments: Uint8Array) {
@@ -467,27 +482,35 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
           continue;
         }
 
-        if (runStart >= 0 && v - runStart >= 2) {
-          const key = this.runKey(runType, runStart, v - 1);
-          alive.add(key);
-          if (!this.runs.has(key)) {
-            const run: Run = {
-              type: runType,
-              start: runStart,
-              end: v - 1,
-              ss: assignments[runStart + ((v - runStart) >> 1)],
-              fade: 0,
-              target: 1,
-              axis: null,
-              extent: null,
-              mesh: null,
-              geometry: null,
-              stations: 0,
-            };
-            if (runType === RUN_SHEET) {
-              this.buildPlate(run);
+        if (runStart >= 0) {
+          const runLength = v - runStart;
+          const minLength = runType === RUN_HELIX
+            ? this.options.minHelixRun
+            : this.options.minSheetRun;
+          if (runLength >= minLength) {
+            const key = this.runKey(runType, runStart, v - 1);
+            alive.add(key);
+            if (!this.runs.has(key)) {
+              const run: Run = {
+                type: runType,
+                start: runStart,
+                end: v - 1,
+                ss: assignments[runStart + (runLength >> 1)],
+                fade: 0,
+                target: 1,
+                axis: null,
+                extent: null,
+                mesh: null,
+                geometry: null,
+                stations: 0,
+                curvePoints: null,
+                binormals: null,
+              };
+              if (runType === RUN_SHEET) {
+                this.buildPlate(run);
+              }
+              this.runs.set(key, run);
             }
-            this.runs.set(key, run);
           }
         }
 
@@ -497,11 +520,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
 
     for (const [key, run] of this.runs) {
-      if (alive.has(key)) {
-        run.target = 1;
-      } else {
-        run.target = 0;
-      }
+      run.target = alive.has(key) ? 1 : 0;
     }
   }
 
@@ -537,18 +556,31 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
 
     // default axis data: no snapping
     this.helixFade.fill(0);
+    this.vertexSheetRun.fill(-1);
     for (let v = 0; v < this.vertexCount; ++v) {
       this.axisProj[v * 3] = positions[ca[v] * 3];
       this.axisProj[v * 3 + 1] = positions[ca[v] * 3 + 1];
       this.axisProj[v * 3 + 2] = positions[ca[v] * 3 + 2];
     }
 
-    // fit the axis of every visible helix run, marking its vertices
+    this.runArray.length = 0;
     for (const run of this.runs.values()) {
-      if (run.type !== RUN_HELIX || run.fade <= 0.001) continue;
-      if (this.fitHelixAxis(positions, run)) {
+      const index = this.runArray.length;
+      this.runArray.push(run);
+
+      if (run.fade <= 0.001) continue;
+
+      if (run.type === RUN_HELIX) {
+        // fit the rigid axis, marking the vertices for tube snapping
+        if (this.fitHelixAxis(positions, run)) {
+          for (let v = run.start; v <= run.end; ++v) {
+            this.helixFade[v] = Math.max(this.helixFade[v], run.fade);
+          }
+        }
+      } else if (run.target === 1) {
+        // vertices covered by an (incoming) plate: the tube avoids them
         for (let v = run.start; v <= run.end; ++v) {
-          this.helixFade[v] = Math.max(this.helixFade[v], run.fade);
+          this.vertexSheetRun[v] = index;
         }
       }
     }
@@ -694,12 +726,66 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     normal[seg * 3 + 2] = nz;
   }
 
+  // Start a tube segment at the tip of a plate's arrow head, so the loop line
+  // visually continues from the arrow instead of running under the plate.
+  private writeArrowTipFrame(seg: number, run: Run, positions: ArrayLike<number>) {
+    const [startPoints, startTangents, startNormals] = this.tubeBuffers;
+
+    const e = run.end * 3;
+    const a = this.caIndices[run.end] * 3;
+
+    const tlen = Math.hypot(this.tangents[e], this.tangents[e + 1], this.tangents[e + 2]);
+    if (tlen < 1e-9) {
+      this.writeTubeVertexFrame(seg, 0, run.end, positions);
+      return;
+    }
+
+    const dx = this.tangents[e] / tlen;
+    const dy = this.tangents[e + 1] / tlen;
+    const dz = this.tangents[e + 2] / tlen;
+    const tip = this.options.arrowLength;
+
+    startPoints[seg * 3] = positions[a] + dx * tip;
+    startPoints[seg * 3 + 1] = positions[a + 1] + dy * tip;
+    startPoints[seg * 3 + 2] = positions[a + 2] + dz * tip;
+
+    // leave the tip along the arrow direction at the usual segment speed
+    startTangents[seg * 3] = dx * tlen;
+    startTangents[seg * 3 + 1] = dy * tlen;
+    startTangents[seg * 3 + 2] = dz * tlen;
+
+    startNormals[seg * 3] = this.normals[e];
+    startNormals[seg * 3 + 1] = this.normals[e + 1];
+    startNormals[seg * 3 + 2] = this.normals[e + 2];
+  }
+
   private assembleTubes(positions: ArrayLike<number>) {
     let seg = 0;
     for (const { offset, length } of this.sequences) {
-      for (let i = 0; i < length - 1 && seg < this.tubeLimit; ++i, ++seg) {
-        this.writeTubeVertexFrame(seg, 0, offset + i, positions);
-        this.writeTubeVertexFrame(seg, 1, offset + i + 1, positions);
+      for (let i = 0; i < length - 1 && seg < this.tubeLimit; ++i) {
+        const a = offset + i;
+        const b = offset + i + 1;
+
+        const runA = this.vertexSheetRun[a];
+        const runB = this.vertexSheetRun[b];
+
+        // both ends under the same plate: the plate replaces the tube
+        if (runA >= 0 && runA === runB) {
+          continue;
+        }
+
+        // leaving a plate: resume the tube at the arrow tip
+        if (runA >= 0 && this.runArray[runA].end === a) {
+          this.writeArrowTipFrame(seg, this.runArray[runA], positions);
+          this.writeTubeVertexFrame(seg, 1, b, positions);
+          seg += 1;
+          continue;
+        }
+
+        // entering a plate (or plain backbone): draw up to the plate base
+        this.writeTubeVertexFrame(seg, 0, a, positions);
+        this.writeTubeVertexFrame(seg, 1, b, positions);
+        seg += 1;
       }
     }
 
@@ -740,7 +826,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       this.pipeMesh.setMatrixAt(count, scratchMatrix);
 
       const color = SS_COLORS[run.ss] ?? SS_WHITE;
-      scratchColor.setRGB(color[0], color[1], color[2]);
+      scratchColor.setRGB(color[0], color[1], color[2], THREE.SRGBColorSpace);
       this.pipeMesh.setColorAt(count, scratchColor);
 
       count += 1;
@@ -758,10 +844,14 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   // --- beta plates ----------------------------------------------------------
 
   private buildPlate(run: Run) {
-    const segmentCount = run.end - run.start + 1; // hermite segments + arrow tip
+    const residueCount = run.end - run.start + 1;
+    // curve points: the strand's alpha carbons plus the arrow tip point
+    const pointCount = residueCount + 1;
     const sps = this.options.stationsPerSegment;
-    const stations = segmentCount * sps;
+    const stations = residueCount * sps;
     run.stations = stations;
+    run.curvePoints = Array.from({ length: pointCount }, () => new THREE.Vector3());
+    run.binormals = new Float32Array(pointCount * 3);
 
     const vertexCount = (stations + 1) * 4;
     const geometry = new THREE.BufferGeometry();
@@ -795,18 +885,16 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   }
 
   // Half width of the plate at a distance d (nm) back from the arrow tip:
-  // constant body, flaring to the head width, then tapering to a point.
+  // constant body, then at the head base a sharp shoulder step up to the head
+  // width and a straight linear taper to the tip, so the head reads as a
+  // clean triangle sitting on the body.
   private plateHalfWidth(d: number, headLen: number): number {
     const { sheetWidth, arrowExtra } = this.options;
     if (headLen <= 1e-6 || d >= headLen) {
       return sheetWidth;
     }
     const wide = sheetWidth * (1 + arrowExtra);
-    const taperEnd = headLen * 0.6;
-    if (d <= taperEnd) {
-      return wide * (d / Math.max(taperEnd, 1e-6));
-    }
-    return wide + (sheetWidth - wide) * ((d - taperEnd) / (headLen - taperEnd));
+    return wide * (d / headLen);
   }
 
   private updatePlates(positions: ArrayLike<number>) {
@@ -823,82 +911,135 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
   }
 
-  // Sweep the arrow cross section along the strand path: hermite segments
-  // through the strand's alpha carbons plus a straight arrow head extension.
+  // Sweep the arrow cross section along a centripetal Catmull-Rom curve
+  // through the strand's alpha carbons and the arrow tip point.
   private writePlatePositions(run: Run, positions: ArrayLike<number>) {
     const geometry = run.geometry!;
+    const curvePoints = run.curvePoints!;
+    const binormals = run.binormals!;
     const attribute = geometry.getAttribute("position") as THREE.BufferAttribute;
     const array = attribute.array as Float32Array;
 
-    const sps = this.options.stationsPerSegment;
+    const ca = this.caIndices;
     const stations = run.stations;
-    const segmentCount = run.end - run.start + 1;
+    const residueCount = run.end - run.start + 1;
     const { sheetThickness, arrowLength } = this.options;
 
-    // approximate path length so the arrow head keeps a fixed physical size
-    const ca = this.caIndices;
+    // curve control points: strand alpha carbons, then the arrow tip point
     let totalLen = arrowLength;
-    for (let v = run.start; v < run.end; ++v) {
+    let prevX = 0, prevY = 0, prevZ = 0;
+    for (let k = 0; k < residueCount; ++k) {
+      const v = run.start + k;
       const a = ca[v] * 3;
-      const b = ca[v + 1] * 3;
-      totalLen += Math.hypot(
-        positions[b] - positions[a],
-        positions[b + 1] - positions[a + 1],
-        positions[b + 2] - positions[a + 2],
-      );
-    }
-    const headLen = Math.min(this.options.headLength, totalLen);
+      const x = positions[a];
+      const y = positions[a + 1];
+      const z = positions[a + 2];
+      curvePoints[k].set(x, y, z);
+      if (k > 0) {
+        totalLen += Math.hypot(x - prevX, y - prevY, z - prevZ);
+      }
+      prevX = x;
+      prevY = y;
+      prevZ = z;
 
-    // segment endpoint frames (CA vertices; the tip segment extends the last)
-    const p1 = [0, 0, 0], p2 = [0, 0, 0];
-    const m1 = [0, 0, 0], m2 = [0, 0, 0];
-    const n1 = [0, 0, 0], n2 = [0, 0, 0];
+      // per control point binormal: cross(tangent, normal), matching the tube
+      const s = v * 3;
+      let bx = this.tangents[s + 1] * this.normals[s + 2] - this.tangents[s + 2] * this.normals[s + 1];
+      let by = this.tangents[s + 2] * this.normals[s] - this.tangents[s] * this.normals[s + 2];
+      let bz = this.tangents[s] * this.normals[s + 1] - this.tangents[s + 1] * this.normals[s];
+      const blen = Math.hypot(bx, by, bz);
+      if (blen > 1e-9) {
+        bx /= blen;
+        by /= blen;
+        bz /= blen;
+      }
+      binormals[k * 3] = bx;
+      binormals[k * 3 + 1] = by;
+      binormals[k * 3 + 2] = bz;
+    }
+
+    // arrow tip point, straight past the last residue along its tangent
+    const e = run.end * 3;
+    const lastA = ca[run.end] * 3;
+    const tlen = Math.hypot(this.tangents[e], this.tangents[e + 1], this.tangents[e + 2]) || 1;
+    const dirX = this.tangents[e] / tlen;
+    const dirY = this.tangents[e + 1] / tlen;
+    const dirZ = this.tangents[e + 2] / tlen;
+    curvePoints[residueCount].set(
+      positions[lastA] + dirX * arrowLength,
+      positions[lastA + 1] + dirY * arrowLength,
+      positions[lastA + 2] + dirZ * arrowLength,
+    );
+    binormals[residueCount * 3] = binormals[(residueCount - 1) * 3];
+    binormals[residueCount * 3 + 1] = binormals[(residueCount - 1) * 3 + 1];
+    binormals[residueCount * 3 + 2] = binormals[(residueCount - 1) * 3 + 2];
+
+    this.plateCurve.points = curvePoints;
+
+    const headLen = Math.min(this.options.headLength, totalLen);
+    const curveSegments = curvePoints.length - 1;
+    const delta = 0.001;
+
+    let lastBx = binormals[0];
+    let lastBy = binormals[1];
+    let lastBz = binormals[2];
 
     for (let j = 0; j <= stations; ++j) {
-      const segIndex = Math.min(Math.floor(j / sps), segmentCount - 1);
-      const t = (j - segIndex * sps) / sps;
+      const t = j / stations;
 
-      this.plateSegmentFrame(run, segIndex, positions, p1, m1, n1, p2, m2, n2);
+      this.plateCurve.getPoint(t, scratchPosition);
 
-      const px = hermitePoint(t, p1[0], m1[0], p2[0], m2[0]);
-      const py = hermitePoint(t, p1[1], m1[1], p2[1], m2[1]);
-      const pz = hermitePoint(t, p1[2], m1[2], p2[2], m2[2]);
-      let tx = hermiteTangent(t, p1[0], m1[0], p2[0], m2[0]);
-      let ty = hermiteTangent(t, p1[1], m1[1], p2[1], m2[1]);
-      let tz = hermiteTangent(t, p1[2], m1[2], p2[2], m2[2]);
-      const tlen = Math.hypot(tx, ty, tz) || 1;
-      tx /= tlen;
-      ty /= tlen;
-      tz /= tlen;
+      // tangent by central difference (allocation free via scratch targets)
+      const t1 = Math.max(t - delta, 0);
+      const t2 = Math.min(t + delta, 1);
+      this.plateCurve.getPoint(t1, scratchPointA);
+      this.plateCurve.getPoint(t2, scratchPointB);
+      scratchTangent.copy(scratchPointB).sub(scratchPointA);
+      if (scratchTangent.lengthSq() < 1e-14) {
+        scratchTangent.set(dirX, dirY, dirZ);
+      }
+      scratchTangent.normalize();
 
-      // flip-free reference frame (averaged binormals, as in the paper)
-      let b1x = n1[1] * m1[2] - n1[2] * m1[1];
-      let b1y = n1[2] * m1[0] - n1[0] * m1[2];
-      let b1z = n1[0] * m1[1] - n1[1] * m1[0];
-      const b1len = Math.hypot(b1x, b1y, b1z) || 1;
-      b1x /= b1len; b1y /= b1len; b1z /= b1len;
-      let b2x = n2[1] * m2[2] - n2[2] * m2[1];
-      let b2y = n2[2] * m2[0] - n2[0] * m2[2];
-      let b2z = n2[0] * m2[1] - n2[1] * m2[0];
-      const b2len = Math.hypot(b2x, b2y, b2z) || 1;
-      b2x /= b2len; b2y /= b2len; b2z /= b2len;
+      // flip-free frame: interpolate the control point binormals along the
+      // curve, then re-perpendicularize against the tangent
+      const ft = t * curveSegments;
+      const segIndex = Math.min(Math.floor(ft), curveSegments - 1);
+      const tau = ft - segIndex;
+      const b1 = segIndex * 3;
+      const b2 = b1 + 3;
+      let bdot = binormals[b1] * binormals[b2]
+        + binormals[b1 + 1] * binormals[b2 + 1]
+        + binormals[b1 + 2] * binormals[b2 + 2];
+      const sign = bdot < 0 ? -1 : 1;
+      scratchBinormal.set(
+        binormals[b1] + (sign * binormals[b2] - binormals[b1]) * tau,
+        binormals[b1 + 1] + (sign * binormals[b2 + 1] - binormals[b1 + 1]) * tau,
+        binormals[b1 + 2] + (sign * binormals[b2 + 2] - binormals[b1 + 2]) * tau,
+      );
+      bdot = scratchBinormal.dot(scratchTangent);
+      scratchBinormal.addScaledVector(scratchTangent, -bdot);
+      if (scratchBinormal.lengthSq() < 1e-12) {
+        scratchBinormal.set(lastBx, lastBy, lastBz);
+        scratchBinormal.addScaledVector(scratchTangent, -scratchBinormal.dot(scratchTangent));
+        if (scratchBinormal.lengthSq() < 1e-12) {
+          scratchBinormal.set(1, 0, 0);
+          scratchBinormal.addScaledVector(scratchTangent, -scratchBinormal.dot(scratchTangent));
+        }
+      }
+      scratchBinormal.normalize();
+      lastBx = scratchBinormal.x;
+      lastBy = scratchBinormal.y;
+      lastBz = scratchBinormal.z;
 
-      let bx = b1x + b2x;
-      let by = b1y + b2y;
-      let bz = b1z + b2z;
-      const bt = bx * tx + by * ty + bz * tz;
-      bx -= bt * tx; by -= bt * ty; bz -= bt * tz;
-      const blen = Math.hypot(bx, by, bz) || 1;
-      bx /= blen; by /= blen; bz /= blen;
+      scratchNormal.crossVectors(scratchBinormal, scratchTangent).normalize();
 
-      // normal = binormal x tangent
-      const nx = by * tz - bz * ty;
-      const ny = bz * tx - bx * tz;
-      const nz = bx * ty - by * tx;
-
-      const d = (1 - j / stations) * totalLen;
+      const d = (1 - t) * totalLen;
       const w = this.plateHalfWidth(d, headLen) * run.fade;
       const h = sheetThickness;
+
+      const bx = scratchBinormal.x, by = scratchBinormal.y, bz = scratchBinormal.z;
+      const nx = scratchNormal.x, ny = scratchNormal.y, nz = scratchNormal.z;
+      const px = scratchPosition.x, py = scratchPosition.y, pz = scratchPosition.z;
 
       const base = j * 12;
       array[base]     = px + bx * w + nx * h;
@@ -916,41 +1057,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
 
     attribute.needsUpdate = true;
-  }
-
-  private plateSegmentFrame(
-    run: Run,
-    segIndex: number,
-    positions: ArrayLike<number>,
-    p1: number[], m1: number[], n1: number[],
-    p2: number[], m2: number[], n2: number[],
-  ) {
-    const ca = this.caIndices;
-    const a = run.start + segIndex;
-    const b = Math.min(a + 1, run.end);
-
-    const ia = ca[a] * 3;
-    const ib = ca[b] * 3;
-    p1[0] = positions[ia]; p1[1] = positions[ia + 1]; p1[2] = positions[ia + 2];
-    p2[0] = positions[ib]; p2[1] = positions[ib + 1]; p2[2] = positions[ib + 2];
-    m1[0] = this.tangents[a * 3]; m1[1] = this.tangents[a * 3 + 1]; m1[2] = this.tangents[a * 3 + 2];
-    m2[0] = this.tangents[b * 3]; m2[1] = this.tangents[b * 3 + 1]; m2[2] = this.tangents[b * 3 + 2];
-    n1[0] = this.normals[a * 3]; n1[1] = this.normals[a * 3 + 1]; n1[2] = this.normals[a * 3 + 2];
-    n2[0] = this.normals[b * 3]; n2[1] = this.normals[b * 3 + 1]; n2[2] = this.normals[b * 3 + 2];
-
-    if (segIndex === run.end - run.start) {
-      // straight arrow head extension past the last strand residue
-      const len = Math.hypot(m2[0], m2[1], m2[2]) || 1;
-      const dx = m2[0] / len;
-      const dy = m2[1] / len;
-      const dz = m2[2] / len;
-      const tip = this.options.arrowLength;
-      p1[0] = p2[0]; p1[1] = p2[1]; p1[2] = p2[2];
-      m1[0] = dx * tip; m1[1] = dy * tip; m1[2] = dz * tip;
-      p2[0] = p1[0] + dx * tip; p2[1] = p1[1] + dy * tip; p2[2] = p1[2] + dz * tip;
-      m2[0] = dx * tip; m2[1] = dy * tip; m2[2] = dz * tip;
-      n1[0] = n2[0]; n1[1] = n2[1]; n1[2] = n2[2];
-    }
   }
 }
 
