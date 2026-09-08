@@ -25,10 +25,19 @@ export interface LiveInteractionState {
   particles: number[];
 }
 
+export interface LiveSelectionState {
+  id: string;
+  name: string;
+  renderer?: string;
+  hide: boolean;
+  particleIds: number[] | null;
+}
+
 export interface LiveFrameState {
   scene?: LiveSceneTransform;
   avatars: LiveAvatarState[];
   interactions: LiveInteractionState[];
+  selections: LiveSelectionState[];
   raw: Record<string, unknown>;
 }
 
@@ -38,6 +47,9 @@ export interface NormalizedLivePayload {
   bonds?: Uint32Array;
   box?: Float32Array;
   residues?: Int32Array;
+  names?: string[];
+  residueNames?: string[];
+  chains?: Uint32Array;
   state?: LiveFrameState;
   hasStateUpdate: boolean;
 }
@@ -155,6 +167,41 @@ function parseAvatar(id: string, value: unknown): LiveAvatarState | undefined {
   };
 }
 
+export const ROOT_SELECTION_ID = 'selection.root';
+export const KEY_RENDERER_PROPERTY = 'nanover.rendering.renderer';
+export const KEY_HIDE_PROPERTY = 'nanover.rendering.hide';
+
+function parseSelection(id: string, value: unknown): LiveSelectionState | undefined {
+  const selection = asObject(value);
+  if (!selection) {
+    return undefined;
+  }
+
+  const properties = asObject(selection.properties);
+  const renderer = properties?.[KEY_RENDERER_PROPERTY];
+
+  const selected = asObject(selection.selected);
+  const rawParticleIds = selected?.particle_ids;
+  let particleIds: number[] | null = null;
+  if (Array.isArray(rawParticleIds)) {
+    particleIds = [];
+    for (const particle of rawParticleIds) {
+      if (typeof particle !== 'number') {
+        return undefined;
+      }
+      particleIds.push(particle);
+    }
+  }
+
+  return {
+    id,
+    name: typeof selection.name === 'string' ? selection.name : id,
+    renderer: typeof renderer === 'string' ? renderer.toLowerCase() : undefined,
+    hide: properties?.[KEY_HIDE_PROPERTY] === true,
+    particleIds,
+  };
+}
+
 function applyStateDelta(sharedState: Record<string, unknown>, delta: SharedStateDelta) {
   if (delta.updates) {
     for (const [key, value] of Object.entries(delta.updates)) {
@@ -173,6 +220,7 @@ function buildLiveFrameState(sharedState: Record<string, unknown>): LiveFrameSta
   let scene = parseScene(sharedState.scene);
   const avatars: LiveAvatarState[] = [];
   const interactions: LiveInteractionState[] = [];
+  const selections: LiveSelectionState[] = [];
 
   for (const [key, value] of Object.entries(sharedState)) {
     if (key === 'scene') {
@@ -195,6 +243,14 @@ function buildLiveFrameState(sharedState: Record<string, unknown>): LiveFrameSta
       if (interaction) {
         interactions.push(interaction);
       }
+      continue;
+    }
+
+    if (key.startsWith('selection.')) {
+      const selection = parseSelection(key, value);
+      if (selection) {
+        selections.push(selection);
+      }
     }
   }
 
@@ -202,6 +258,7 @@ function buildLiveFrameState(sharedState: Record<string, unknown>): LiveFrameSta
     scene,
     avatars,
     interactions,
+    selections,
     raw: sharedState,
   };
 }
@@ -226,6 +283,9 @@ export function normalizeLivePayload(
     bonds: frame.bonds,
     box: frame.box,
     residues: frame.residues,
+    names: frame.names,
+    residueNames: frame.residueNames,
+    chains: frame.chains,
     state,
     hasStateUpdate,
   };

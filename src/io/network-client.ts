@@ -14,9 +14,17 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import NaiveRenderer from '../visuals/NaiveRenderer';
+import { CartoonRenderer } from '../visuals/CartoonRenderer';
+import { SimpleCartoonRenderer } from '../visuals/SimpleCartoonRenderer';
 import { AvatarRendering } from '../visuals/avatar-rendering';
 import { InteractionManager, InteractionUpdate } from '../tools/interaction-manager';
-import { LiveAvatarState, LiveInteractionState, normalizeLivePayload } from '../core/live-frame-state';
+import {
+  LiveAvatarState,
+  LiveInteractionState,
+  LiveSelectionState,
+  normalizeLivePayload,
+  ROOT_SELECTION_ID,
+} from '../core/live-frame-state';
 import { AvatarComponentsState } from '../core/avatar-state';
 import { setForceType } from '../state';
 import {
@@ -42,6 +50,8 @@ interface NetworkClientOptions {
   objects: Object3D;
   cameraControls: OrbitControls;
   liveRenderer: NaiveRenderer;
+  cartoonRenderer: CartoonRenderer;
+  simpleCartoonRenderer: SimpleCartoonRenderer;
   avatarRendering: AvatarRendering;
   interactionManager: InteractionManager;
   primitivesRenderer: PrimitivesRenderer;
@@ -60,15 +70,38 @@ export type UserCommand = {
 
 const BOX_EDGE_WIDTH_PX = 3;
 
+const RENDERER_NAIVE = 0;
+const RENDERER_CARTOON = 1;
+const RENDERER_CARTOON_SPLINE = 2;
+
+function rendererKind(renderer: string | undefined): number {
+  if (renderer && renderer.startsWith('cartoon')) {
+    return renderer.includes('extended') ? RENDERER_CARTOON_SPLINE : RENDERER_CARTOON;
+  }
+  return RENDERER_NAIVE;
+}
+
 export class NetworkClient {
   private readonly objects: Object3D;
   private readonly cameraControls: OrbitControls;
   private readonly liveRenderer: NaiveRenderer;
+  private readonly cartoonRenderer: CartoonRenderer;
+  private readonly simpleCartoonRenderer: SimpleCartoonRenderer;
   private readonly avatarRendering: AvatarRendering;
   private readonly interactionManager: InteractionManager;
   private readonly primitivesRenderer: PrimitivesRenderer;
   private readonly worker: Worker;
   private readonly channel = new MessageChannel();
+
+  private topologyNames: string[] | null = null;
+  private topologyResidues: Int32Array | null = null;
+  private topologyResidueNames: string[] | null = null;
+  private topologyChains: Uint32Array | null = null;
+  private lastElements: Uint8Array | null = null;
+  private lastBonds: Uint32Array | null = null;
+  private lastPositions: Float32Array | null = null;
+  private lastSelections: LiveSelectionState[] = [];
+  private lastSelectionSignature = '';
 
   private readonly boxEdgesGeometry = new LineSegmentsGeometry();
   private readonly boxEdgesMaterial = new LineMaterial({
@@ -112,6 +145,8 @@ export class NetworkClient {
     this.objects = options.objects;
     this.cameraControls = options.cameraControls;
     this.liveRenderer = options.liveRenderer;
+    this.cartoonRenderer = options.cartoonRenderer;
+    this.simpleCartoonRenderer = options.simpleCartoonRenderer;
     this.avatarRendering = options.avatarRendering;
     this.interactionManager = options.interactionManager;
     this.primitivesRenderer = options.primitivesRenderer;
@@ -142,6 +177,18 @@ export class NetworkClient {
     this.primitivesRenderer.clear();
     this.publishedCursorKeys.clear();
     this.lastSentCursors.clear();
+    this.topologyNames = null;
+    this.topologyResidues = null;
+    this.topologyResidueNames = null;
+    this.topologyChains = null;
+    this.lastElements = null;
+    this.lastBonds = null;
+    this.lastPositions = null;
+    this.lastSelections = [];
+    this.lastSelectionSignature = '';
+    this.cartoonRenderer.visible = false;
+    this.simpleCartoonRenderer.visible = false;
+    this.liveRenderer.visible = true;
     this.worker.postMessage({ host });
   }
 
@@ -321,21 +368,41 @@ export class NetworkClient {
 
     this.handleCommandMessages(message.command);
 
-    if (normalized.elements && normalized.bonds) {
-      const colors = buildAtomColors(normalized.elements);
-      this.liveRenderer.setData(
-        new Array(normalized.elements.length * 3),
-        colors,
-        normalized.bonds,
-      );
-    }
-
     if (normalized.residues) {
       this.interactionManager.setParticleResidues(normalized.residues);
     }
 
+    let topologyChanged = false;
+    if (normalized.elements && normalized.bonds) {
+      this.lastElements = normalized.elements;
+      this.lastBonds = normalized.bonds;
+      topologyChanged = true;
+    }
+    if (normalized.names) {
+      this.topologyNames = normalized.names;
+      topologyChanged = true;
+    }
+    if (normalized.residues) {
+      this.topologyResidues = normalized.residues;
+      topologyChanged = true;
+    }
+    if (normalized.residueNames) {
+      this.topologyResidueNames = normalized.residueNames;
+      topologyChanged = true;
+    }
+    if (normalized.chains) {
+      this.topologyChains = normalized.chains;
+      topologyChanged = true;
+    }
+    if (topologyChanged) {
+      this.applyRenderers();
+    }
+
     if (normalized.positions) {
+      this.lastPositions = normalized.positions;
       this.liveRenderer.setPositions(normalized.positions);
+      this.cartoonRenderer.setPositions(normalized.positions);
+      this.simpleCartoonRenderer.setPositions(normalized.positions);
       this.interactionManager.setCurrentPositions(normalized.positions);
     }
 
@@ -350,6 +417,7 @@ export class NetworkClient {
       }
 
       this.applySceneState(normalized.state.scene);
+      this.applySelections(normalized.state.selections);
       const remoteAvatars: LiveAvatarState[] = [];
       for (const avatar of normalized.state.avatars) {
         if (avatar.id !== this.localAvatarId) {
@@ -471,6 +539,108 @@ export class NetworkClient {
     simulationToWorld(updateSceneMatrixWorld(this.objects), this.sceneCenter, this.sceneCenterWorld);
     this.cameraControls.target.copy(this.sceneCenterWorld);
     this.cameraControls.update();
+  }
+
+  private applySelections(selections: LiveSelectionState[]) {
+    const signature = selections
+      .map(({ id, renderer, hide, particleIds }) => {
+        if (particleIds === null) {
+          return `${id}|${renderer ?? ''}|${hide}|*`;
+        }
+        let sum = 0;
+        for (const particle of particleIds) {
+          sum += particle;
+        }
+        return `${id}|${renderer ?? ''}|${hide}|${particleIds.length}:${sum}:${particleIds[0]}:${particleIds[particleIds.length - 1]}`;
+      })
+      .join(';');
+    if (signature === this.lastSelectionSignature) {
+      return;
+    }
+    this.lastSelectionSignature = signature;
+    this.lastSelections = selections;
+    this.applyRenderers();
+  }
+
+  private applyRenderers() {
+    if (!this.lastElements || !this.lastBonds) {
+      return;
+    }
+
+    const atomCount = this.lastElements.length;
+    const kinds = new Uint8Array(atomCount).fill(RENDERER_NAIVE);
+
+    const root = this.lastSelections.find(({ id }) => id === ROOT_SELECTION_ID);
+    if (root) {
+      kinds.fill(rendererKind(root.renderer));
+    }
+    for (const selection of this.lastSelections) {
+      if (selection.id === ROOT_SELECTION_ID || selection.renderer === undefined) {
+        continue;
+      }
+      const kind = rendererKind(selection.renderer);
+      if (selection.particleIds === null) {
+        kinds.fill(kind);
+        continue;
+      }
+      for (const particle of selection.particleIds) {
+        if (particle >= 0 && particle < atomCount) {
+          kinds[particle] = kind;
+        }
+      }
+    }
+
+    // each cartoon renderer only draws the particles assigned to it
+    const simpleAtoms = new Set<number>();
+    const splineAtoms = new Set<number>();
+    for (let i = 0; i < atomCount; ++i) {
+      if (kinds[i] === RENDERER_CARTOON) {
+        simpleAtoms.add(i);
+      } else if (kinds[i] === RENDERER_CARTOON_SPLINE) {
+        splineAtoms.add(i);
+      }
+    }
+    this.simpleCartoonRenderer.setTopology(
+      this.topologyNames ?? [],
+      this.topologyResidues ?? [],
+      this.topologyResidueNames ?? [],
+      this.topologyChains ?? [],
+      simpleAtoms.size === 0 ? new Set<number>() : simpleAtoms,
+    );
+    this.cartoonRenderer.setTopology(
+      this.topologyNames ?? [],
+      this.topologyResidues ?? [],
+      this.topologyResidueNames ?? [],
+      this.topologyChains ?? [],
+      splineAtoms.size === 0 ? new Set<number>() : splineAtoms,
+    );
+
+    // particles the ribbons cover are excluded from ball-and-stick; everything
+    // else (ligands, solvent, or atoms the ribbons cannot represent) defaults to it
+    const simpleRibbonResidues = this.simpleCartoonRenderer.ribbonResidues;
+    const splineRibbonResidues = this.cartoonRenderer.ribbonResidues;
+    const residues = this.topologyResidues;
+    const naiveAtoms = new Set<number>();
+    for (let i = 0; i < atomCount; ++i) {
+      const residue = residues !== null ? residues[i] : -1;
+      const ribbon = residues !== null
+        && (simpleRibbonResidues.has(residue) || splineRibbonResidues.has(residue));
+      if (!ribbon) {
+        naiveAtoms.add(i);
+      }
+    }
+
+    const colors = buildAtomColors(this.lastElements);
+    this.liveRenderer.setData(
+      this.lastPositions ?? new Array(atomCount * 3),
+      colors,
+      this.lastBonds,
+      naiveAtoms,
+    );
+
+    this.liveRenderer.visible = naiveAtoms.size > 0;
+    this.simpleCartoonRenderer.visible = this.simpleCartoonRenderer.hasData;
+    this.cartoonRenderer.visible = this.cartoonRenderer.hasData;
   }
 
   private updateBoxGeometry(box: Float32Array) {

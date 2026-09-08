@@ -124,6 +124,21 @@ function connectToHost(host: string) {
         frame.residues = bytesToArrayManaged(particleResidues, Int32Array);
       }
 
+      const particleNames = data.frame["particle.names"];
+      if (Array.isArray(particleNames)) {
+        frame.names = particleNames.map(String);
+      }
+
+      const residueNames = data.frame["residue.names"];
+      if (Array.isArray(residueNames)) {
+        frame.residueNames = residueNames.map(String);
+      }
+
+      const residueChains = data.frame["residue.chains"];
+      if (isUint8Array(residueChains)) {
+        frame.chains = bytesToArrayManaged(residueChains, Uint32Array);
+      }
+
       const systemBoxVectors = data.frame["system.box.vectors"];
       if (isUint8Array(systemBoxVectors)) {
         frame.box = bytesToArrayManaged(systemBoxVectors, Float32Array);

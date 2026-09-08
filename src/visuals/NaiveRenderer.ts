@@ -34,6 +34,10 @@ class NaiveRenderer extends THREE.Object3D {
   private baseAtomColors: Float32Array | null = null;
   private baseBondColors: Float32Array | null = null;
 
+  private visibleAtoms: Int32Array = new Int32Array(0);
+  private atomToVisible: Int32Array = new Int32Array(0);
+  private visibleCount = 0;
+
   private atomToBonds: Map<number, number[]> = new Map();
 
   private hoverAtoms: Set<number> = new Set();
@@ -75,33 +79,67 @@ class NaiveRenderer extends THREE.Object3D {
     positions: ArrayLike<number>,
     colors: ArrayLike<number>,
     bonds: ArrayLike<number>,
+    particleFilter: Set<number> | null = null,
   ) {
     const atomCount = positions.length / 3;
-    this.atomsMesh.count = atomCount;
 
-    this.baseAtomColors = new Float32Array(atomCount * 3);
-    for (let i = 0; i < atomCount; ++i) {
-      colorA.fromArray(colors, i * 3);
-      this.atomsMesh.setColorAt(i, colorA);
-      this.baseAtomColors[i * 3]     = colorA.r;
-      this.baseAtomColors[i * 3 + 1] = colorA.g;
-      this.baseAtomColors[i * 3 + 2] = colorA.b;
+    if (particleFilter) {
+      const visible: number[] = [];
+      this.atomToVisible = new Int32Array(atomCount).fill(-1);
+      for (let i = 0; i < atomCount; ++i) {
+        if (particleFilter.has(i)) {
+          this.atomToVisible[i] = visible.length;
+          visible.push(i);
+        }
+      }
+      this.visibleAtoms = Int32Array.from(visible);
+    } else {
+      this.visibleAtoms = new Int32Array(atomCount);
+      this.atomToVisible = new Int32Array(atomCount);
+      for (let i = 0; i < atomCount; ++i) {
+        this.visibleAtoms[i] = i;
+        this.atomToVisible[i] = i;
+      }
     }
 
-    const bondCount = bonds.length / 2;
-    this.bondsMesh.count = bondCount;
+    this.visibleCount = this.visibleAtoms.length;
+    this.atomsMesh.count = this.visibleCount;
 
-    this._bonds = bonds;
+    this.baseAtomColors = new Float32Array(this.visibleCount * 3);
+    for (let slot = 0; slot < this.visibleCount; ++slot) {
+      const atom = this.visibleAtoms[slot];
+      colorA.fromArray(colors, atom * 3);
+      this.atomsMesh.setColorAt(slot, colorA);
+      this.baseAtomColors[slot * 3]     = colorA.r;
+      this.baseAtomColors[slot * 3 + 1] = colorA.g;
+      this.baseAtomColors[slot * 3 + 2] = colorA.b;
+    }
 
     this.atomToBonds.clear();
-    this.baseBondColors = new Float32Array(bondCount * 3);
-    for (let i = 0; i < bondCount; ++i) {
-      const [ia, ib] = [bonds[i * 2 + 0], bonds[i * 2 + 1]];
-
+    const keptBonds: number[] = [];
+    const totalBonds = bonds.length / 2;
+    for (let i = 0; i < totalBonds; ++i) {
+      const ia = bonds[i * 2 + 0];
+      const ib = bonds[i * 2 + 1];
+      if (this.atomToVisible[ia] < 0 || this.atomToVisible[ib] < 0) {
+        continue;
+      }
+      const bondSlot = keptBonds.length / 2;
+      keptBonds.push(ia, ib);
       if (!this.atomToBonds.has(ia)) this.atomToBonds.set(ia, []);
       if (!this.atomToBonds.has(ib)) this.atomToBonds.set(ib, []);
-      this.atomToBonds.get(ia)!.push(i);
-      this.atomToBonds.get(ib)!.push(i);
+      this.atomToBonds.get(ia)!.push(bondSlot);
+      this.atomToBonds.get(ib)!.push(bondSlot);
+    }
+
+    this._bonds = keptBonds;
+    const bondCount = keptBonds.length / 2;
+    this.bondsMesh.count = bondCount;
+
+    this.baseBondColors = new Float32Array(bondCount * 3);
+    for (let i = 0; i < bondCount; ++i) {
+      const ia = keptBonds[i * 2 + 0];
+      const ib = keptBonds[i * 2 + 1];
 
       colorA.fromArray(colors, ia * 3);
       colorB.fromArray(colors, ib * 3);
@@ -125,21 +163,21 @@ class NaiveRenderer extends THREE.Object3D {
   }
 
   setPositions(positions: ArrayLike<number>) {
-    const atomCount = positions.length / 3;
-    this.atomsMesh.count = atomCount;
+    this.atomsMesh.count = this.visibleCount;
 
     // TODO: independent scales
     matrix.identity();
     matrix.scale(hackScale);
 
-    for (let i = 0; i < atomCount; ++i) {
-      t.fromArray(positions, i * 3);
+    for (let slot = 0; slot < this.visibleCount; ++slot) {
+      const atom = this.visibleAtoms[slot];
+      t.fromArray(positions, atom * 3);
       matrix.setPosition(t);
-      this.atomsMesh.setMatrixAt(i, matrix);
+      this.atomsMesh.setMatrixAt(slot, matrix);
     }
 
     const bonds = this._bonds;
-    const bondCount = bonds.length;
+    const bondCount = bonds.length / 2;
 
     for (let i = 0; i < bondCount; ++i) {
       const [ia, ib] = [bonds[i * 2 + 0], bonds[i * 2 + 1]];
@@ -191,24 +229,30 @@ class NaiveRenderer extends THREE.Object3D {
 
     for (const idx of this.prevAllHighlighted) {
       if (!newAllHighlighted.has(idx)) {
-        colorA.fromArray(this.baseAtomColors, idx * 3);
-        this.atomsMesh.setColorAt(idx, colorA);
+        const slot = this.atomToVisible[idx];
+        if (slot < 0) continue;
+        colorA.fromArray(this.baseAtomColors, slot * 3);
+        this.atomsMesh.setColorAt(slot, colorA);
         atomsDirty = true;
       }
     }
 
     for (const idx of this.activeAtoms) {
-      colorA.fromArray(this.baseAtomColors, idx * 3);
+      const slot = this.atomToVisible[idx];
+      if (slot < 0) continue;
+      colorA.fromArray(this.baseAtomColors, slot * 3);
       colorA.lerp(NaiveRenderer.WHITE, activeBlend);
-      this.atomsMesh.setColorAt(idx, colorA);
+      this.atomsMesh.setColorAt(slot, colorA);
       atomsDirty = true;
     }
 
     for (const idx of this.hoverAtoms) {
       if (!this.activeAtoms.has(idx)) {
-        colorA.fromArray(this.baseAtomColors, idx * 3);
+        const slot = this.atomToVisible[idx];
+        if (slot < 0) continue;
+        colorA.fromArray(this.baseAtomColors, slot * 3);
         colorA.lerp(NaiveRenderer.WHITE, hoverBlend);
-        this.atomsMesh.setColorAt(idx, colorA);
+        this.atomsMesh.setColorAt(slot, colorA);
         atomsDirty = true;
       }
     }

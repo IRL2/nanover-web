@@ -23,6 +23,8 @@ import { toggleFullScreen } from './helpers/fullscreen';
 import { resizeRendererToDisplaySize } from './helpers/responsiveness';
 import './style.css';
 import NaiveRenderer from './visuals/NaiveRenderer';
+import { CartoonRenderer } from './visuals/CartoonRenderer';
+import { SimpleCartoonRenderer } from './visuals/SimpleCartoonRenderer';
 import {
   controlPanel,
   getColocationMode,
@@ -64,6 +66,8 @@ class SceneApp {
   private readonly objects = new Object3D();
   private readonly panelRot = new Object3D();
   private readonly live = new NaiveRenderer();
+  private readonly cartoon = new CartoonRenderer();
+  private readonly simpleCartoon = new SimpleCartoonRenderer();
   private readonly trajectoryNameElement: HTMLElement | null;
   private readonly avatarRendering: AvatarRendering;
 
@@ -95,6 +99,10 @@ class SceneApp {
     threeScene.add(this.calibratedSpace);
     this.calibratedSpace.add(this.objects);
     this.objects.add(this.live);
+    this.objects.add(this.cartoon);
+    this.objects.add(this.simpleCartoon);
+    this.cartoon.visible = false;
+    this.simpleCartoon.visible = false;
     threeScene.add(this.panelRot);
 
     this.camera = new PerspectiveCamera(75, this.canvas.clientWidth / this.canvas.clientHeight, 0.1, 1000);
@@ -144,6 +152,8 @@ class SceneApp {
       objects: this.objects,
       cameraControls: this.cameraControls,
       liveRenderer: this.live,
+      cartoonRenderer: this.cartoon,
+      simpleCartoonRenderer: this.simpleCartoon,
       avatarRendering: this.avatarRendering,
       interactionManager: this.interactionManager,
       primitivesRenderer: this.primitivesRenderer,
@@ -376,6 +386,8 @@ class SceneApp {
     );
 
     this.primitivesRenderer.update(activeCamera);
+    this.cartoon.update(dt, activeCamera);
+    this.simpleCartoon.update(dt, activeCamera);
 
     if (!this.renderer.xr.isPresenting && resizeRendererToDisplaySize(this.renderer)) {
       this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;

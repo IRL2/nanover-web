@@ -23,10 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 *.pyc
+tmp
+.tmp-test
 
 # ssl
 localhost.key
 localhost.pem
+
 
 .env
 .env.local

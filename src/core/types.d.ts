@@ -30,7 +30,10 @@ export type TestFrame = {
   bonds: Uint32Array;
   box: Float32Array;
   residues: Int32Array;
-  
+  names: string[];
+  residueNames: string[];
+  chains: Uint32Array;
+
   state: SharedMessageRecord;
   frame: SharedMessageRecord;
 }
