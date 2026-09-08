@@ -59,7 +59,6 @@ export class XRInputManager {
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
-  private readonly objects: Object3D;
 
   private readonly panelRot: Object3D;
   private readonly interactionManager: InteractionManager;
@@ -82,8 +81,6 @@ export class XRInputManager {
   private readonly tempPosA = new Vector3();
   private readonly tempQuat = new Quaternion();
   private readonly tempScale = new Vector3();
-  private readonly tempMatrixA = new Matrix4();
-  private readonly tempMatrixB = new Matrix4();
   private readonly mirrorMatrix = new Matrix4().makeScale(-1, 1, 1);
   private readonly avatarFacingCorrection = new Quaternion(0, 1, 0, 0);
 
@@ -91,7 +88,6 @@ export class XRInputManager {
     this.renderer = options.renderer;
     this.scene = options.scene;
     this.camera = options.camera;
-    this.objects = options.objects;
     this.panelRot = options.panelRot;
     this.interactionManager = options.interactionManager;
 
@@ -161,7 +157,10 @@ export class XRInputManager {
       const cursorObject: Object3D = this.controllerTips.get(controller) ?? controller;
       cursorObject.updateWorldMatrix(true, false);
       this.componentMatrix.multiplyMatrices(this.calibratedInverse, cursorObject.matrixWorld);
-      this.applySimulationMirror(this.componentMatrix);
+      // cursor poses are shared in the calibrated space using the unity convention.
+      // this client's calibrated space is right-handed, so mirror the pose
+      // at X (position x -> -x, quaternion (x, y, z, w) -> (x, -y, -z, w))
+      this.componentMatrix.premultiply(this.mirrorMatrix);
       this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
 
       cursors.push({
@@ -174,20 +173,6 @@ export class XRInputManager {
     }
 
     return cursors;
-  }
-
-  // the shared transform hierarchy is rooted at transform.simulation, which the
-  // server keeps mirrored in X relative to the scene pose; this client renders the
-  // scene unmirrored, so outgoing cursor poses are mirrored about the simulation
-  // frame to keep server-side intersection and grabbing aligned with rendered positions
-  private applySimulationMirror(matrix: Matrix4) {
-    this.objects.updateMatrix();
-    if (Math.abs(this.objects.matrix.determinant()) < 1e-8) {
-      return;
-    }
-    this.tempMatrixB.copy(this.objects.matrix).invert();
-    this.tempMatrixA.copy(this.objects.matrix).multiply(this.mirrorMatrix).multiply(this.tempMatrixB);
-    matrix.premultiply(this.tempMatrixA);
   }
 
   private readJoystick(session: XRSession | null, handedness: 'left' | 'right'): [number, number] {
@@ -534,6 +519,7 @@ export class XRInputManager {
 
   private addAvatarComponent(components: AvatarComponentsState, name: string, source: Object3D) {
     this.componentMatrix.multiplyMatrices(this.calibratedInverse, source.matrixWorld);
+    this.componentMatrix.premultiply(this.mirrorMatrix);
     this.componentMatrix.decompose(this.tempPosA, this.tempQuat, this.tempScale);
     this.tempQuat.multiply(this.avatarFacingCorrection).normalize();
 

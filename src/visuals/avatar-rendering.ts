@@ -82,6 +82,12 @@ export class AvatarRendering {
         this.position.fromArray(component.position);
         this.rotation.fromArray(component.rotation);
 
+        // avatar poses are shared in the calibrated space using the unity convention.
+        // this client's calibrated space is right-handed, so mirror the pose
+        // at X (position x -> -x, quaternion (x, y, z, w) -> (x, -y, -z, w))
+        this.position.x = -this.position.x;
+        this.rotation.set(this.rotation.x, -this.rotation.y, -this.rotation.z, this.rotation.w);
+
         if (component.name === 'headset') {
           this.scale.set(0.05, 0.05, 0.05);
           this.matrix.compose(this.position, this.rotation, this.scale);
