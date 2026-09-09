@@ -1,11 +1,16 @@
-Github-CI: [![Build Status][build_status]][build_link]
+[![Build Status][build_status]][build_link]
 
 [build_status]: ./../../actions/workflows/build.yml/badge.svg
 [build_link]: ./../../actions/workflows/build.yml
 
-# NanoVer Web
+# NanoVer WebXR
+A WebXR client for NanoVer.
 
-An MVP of NanoVer for the browser and WebXR.
+## Contents
+
+1. [Developer setup](#Developer-setup)
+2. [WebXR and HTTPS](#WebXR-and-HTTPS)
+3. [Serving NanoVer for WebXR](#serving-nanover-to-the-webxr-client-from-pythonjupyter-notebook)
 
 ## Developer setup
 
@@ -46,7 +51,7 @@ Preview the standalone web package:
 npm run preview
 ```
 
-### WebXR and headset
+### WebXR and HTTPS
 
 For security, WebXR requires that the page be served over HTTPS, so you will need to configure the Live Server extension to use an SSL certificate.
 

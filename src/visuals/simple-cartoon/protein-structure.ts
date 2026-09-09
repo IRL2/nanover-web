@@ -1,13 +1,5 @@
 "use strict";
 
-// Protein topology analysis shared by the cartoon-style renderers:
-//  - polypeptide sequence extraction from particle/residue names and chains
-//  - cardinal (hermite) spline frame construction following the visually
-//    continuous ribbon method of Jamieson-Binnie & Glowacki (2021),
-//    https://doi.org/10.3389/fcomp.2021.642172
-//  - DSSP secondary structure assignment, ported from nanover-imd-xr
-//    (DsspAlgorithm.cs)
-
 export const STANDARD_AMINO_ACIDS = new Set([
   "ALA", "ARG", "ASN", "ASP", "CYS",
   "GLN", "GLU", "GLY", "HIS", "ILE",
@@ -44,13 +36,9 @@ export interface Sequence {
 }
 
 export interface PolypeptideData {
-  // runs of consecutive alpha carbons, indexing into caIndices/vertexResidues
   sequences: Sequence[];
-  // atom index of every alpha carbon, flattened over all sequences
   caIndices: Int32Array<ArrayBuffer>;
-  // residue index of every alpha carbon vertex
   vertexResidues: number[];
-  // residue indices per sequence (same flattening as caIndices)
   residueSequences: number[][];
 }
 
@@ -70,7 +58,6 @@ export function extractPolypeptides(
   let currentChain = -1;
 
   const flush = () => {
-    // a stable ribbon needs at least 3 alpha carbons
     if (currentResidues.length >= 3) {
       sequences.push({
         offset: caList.length - currentResidues.length,
@@ -114,8 +101,6 @@ export function extractPolypeptides(
   };
 }
 
-// Cardinal spline tangents and second-derivative normals for one sequence,
-// with normals oriented so consecutive frames rotate by at most 90 degrees.
 export function computeSplineFrames(
   positions: ArrayLike<number>,
   caIndices: Int32Array,
@@ -201,7 +186,6 @@ export function computeSplineFrames(
     }
   }
 
-  // the first normal extrapolates from the next two
   const n1x = normals[(offset + 1) * 3];
   const n1y = normals[(offset + 1) * 3 + 1];
   const n1z = normals[(offset + 1) * 3 + 2];
@@ -218,7 +202,6 @@ export function computeSplineFrames(
     normals[offset * 3 + 2] = nz / nlen;
   }
 
-  // orient normals so consecutive normals differ by at most 90 degrees
   for (let j = 1; j < length; ++j) {
     const prev = (offset + j - 1) * 3;
     const curr = (offset + j) * 3;
@@ -234,9 +217,6 @@ export function computeSplineFrames(
   }
 }
 
-// DSSP secondary structure assignment over the residues of polypeptide
-// sequences. Ordinals match the flattened residueSequences order, i.e. the
-// alpha carbon vertex order produced by extractPolypeptides.
 export class DsspCalculator {
   private sequences: Sequence[] = [];
   private residueIndices = new Int32Array(0);
@@ -309,7 +289,6 @@ export class DsspCalculator {
       }
     }
 
-    // O is sometimes named OC1/OC2; guess the first atom starting with O
     for (let atom = atomNames.length - 1; atom >= 0; --atom) {
       const ordinal = this.ordinalByResidue.get(atomResidues[atom]);
       if (ordinal === undefined) continue;
@@ -410,7 +389,6 @@ export class DsspCalculator {
       this.acceptorEnergy[i] = 1e10;
     }
 
-    // hydrogen bonds between residues spaced at least 3 apart
     for (let i = offset; i < end - 3; ++i) {
       if (!valid[i]) continue;
       for (let j = i + 3; j < end; ++j) {
@@ -437,7 +415,6 @@ export class DsspCalculator {
       }
     }
 
-    // turns
     for (let i = offset; i < end; ++i) {
       const acceptor = this.acceptor[i];
       if (acceptor < 0) continue;
@@ -454,7 +431,6 @@ export class DsspCalculator {
       }
     }
 
-    // antiparallel bridges
     for (let i = offset; i < end; ++i) {
       const acceptor = this.acceptor[i];
       if (acceptor >= 0 && this.acceptor[acceptor] === i) {
@@ -473,7 +449,6 @@ export class DsspCalculator {
       }
     }
 
-    // parallel bridges
     for (let i = offset + 1; i < end; ++i) {
       const res2 = this.acceptor[i - 1];
       if (res2 < 0) continue;
@@ -494,7 +469,6 @@ export class DsspCalculator {
       }
     }
 
-    // helices and sheets
     this.assignHelix(offset, end, PAT_FIVE_TURN, 5, SS_PI_HELIX);
     this.assignHelix(offset, end, PAT_FOUR_TURN, 4, SS_ALPHA_HELIX);
 
@@ -510,7 +484,6 @@ export class DsspCalculator {
 
     this.assignHelix(offset, end, PAT_THREE_TURN, 3, SS_THREE_TEN_HELIX);
 
-    // expand sheets to adjacent unassigned residues
     const expand: number[] = [];
     for (let i = offset; i < end; ++i) {
       if (this.assignments[i] !== SS_NONE) continue;
@@ -572,7 +545,6 @@ function distanceSquared(
   return dx * dx + dy * dy + dz * dz;
 }
 
-// electrostatic hydrogen bond energy; res1 is the acceptor (C=O), res2 the donor (N-H)
 function bondEnergy(
   oPos: Float32Array,
   cPos: Float32Array,

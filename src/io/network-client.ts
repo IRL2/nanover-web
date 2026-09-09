@@ -675,9 +675,6 @@ export class NetworkClient {
   }
 
   private createLocalAvatarId(): string {
-    // stable across reloads so the client's "<id>/notify" command registration is
-    // re-registered (overwritten) on reconnect instead of accumulating stale entries
-    // on the server, which notify_all would otherwise try to invoke after disconnect
     try {
       const stored = window.localStorage.getItem('nanover-avatar-id');
       if (stored) {

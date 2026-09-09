@@ -1,67 +1,35 @@
-"use strict";
+﻿"use strict";
 
 import * as THREE from "three";
 import {
   computeSplineFrames,
-  DsspCalculator,
   extractPolypeptides,
   Sequence,
   SS_COLORS,
   SS_HELIX_MASK,
   SS_SHEET,
   SS_WHITE,
-} from "./protein-structure";
-
-// Simple ("classical") cartoon renderer, drawing the secondary structure as
-// rigid geometric primitives in the style of the original ribbon diagrams:
-//
-//  - alpha helices -> one rigid cylinder ("pipe") per helix, placed along the
-//    fitted helix axis (a single instanced cylinder, updated by matrix only)
-//  - beta strands  -> one uniform extruded plate ("arrow") per strand: a
-//    centripetal Catmull-Rom curve through the strand's alpha carbons, swept
-//    with a constant rectangular cross section that flares into a distinct
-//    arrow head of fixed physical length at the C-terminal end
-//  - loops/coils   -> a thin constant-radius tube following the alpha carbon
-//    spline. The tube runs underneath helix pipes (blended onto the pipe axis,
-//    hidden inside the pipe) but stops at the base of a plate and resumes at
-//    the arrow tip, so it never shows through the plates.
-//
-// Unlike the spline CartoonRenderer, no cross sections morph between residues:
-// pipes are perfectly rigid cylinders, plates are uniform slabs. Elements grow
-// and shrink smoothly (pipe radius, plate width) as the DSSP assignment, which
-// is recomputed about once a second, fades in and out per helix/strand run.
+} from "./simple-cartoon/protein-structure";
+import tubeFragmentShader from "./simple-cartoon/shaders/tube-fragment.glsl?raw";
+import tubeVertexShader from "./simple-cartoon/shaders/tube-vertex.glsl?raw";
 
 export interface SimpleCartoonRendererOptions {
   maxResidues?: number;
   maxHelices?: number;
-  // radius of loop tubes (nm)
   loopRadius?: number;
-  // radius of helix pipes (nm)
   helixRadius?: number;
-  // half width of beta plates (nm)
   sheetWidth?: number;
-  // half thickness of beta plates (nm)
   sheetThickness?: number;
-  // extra width factor of the arrow head over the plate body
   arrowExtra?: number;
-  // physical length of the arrow head region, measured back from the tip (nm)
   headLength?: number;
-  // length of the arrow head past the last strand residue (nm)
   arrowLength?: number;
-  // minimum number of residues for a helix pipe / beta plate
   minHelixRun?: number;
   minSheetRun?: number;
-  // lengthwise subdivisions of each tube segment
   tubeSegments?: number;
-  // radial subdivisions of the tube cylinder
   tubeSides?: number;
-  // radial subdivisions of helix pipes
   pipeSides?: number;
-  // path stations per residue when extruding plates
   stationsPerSegment?: number;
-  // seconds between DSSP recalculations
   dsspInterval?: number;
-  // fade speed (per second) of element grow/shrink transitions
   fadeSpeed?: number;
 }
 
@@ -85,74 +53,6 @@ const DEFAULT_OPTIONS: Required<SimpleCartoonRendererOptions> = {
   fadeSpeed: 0.5,
 };
 
-// --- thin constant-radius tube along a hermite spline segment ---------------
-
-const TUBE_VERTEX_SHADER = /* glsl */ `
-attribute vec3 aStartPoint;
-attribute vec3 aEndPoint;
-attribute vec3 aStartTangent;
-attribute vec3 aEndTangent;
-attribute vec3 aStartNormal;
-attribute vec3 aEndNormal;
-
-uniform float uRadius;
-
-varying vec3 vNormal;
-
-vec3 hermitePoint(float t, vec3 p1, vec3 m1, vec3 p2, vec3 m2) {
-  float t2 = t * t;
-  float t3 = t2 * t;
-  return (2.0 * t3 - 3.0 * t2 + 1.0) * p1
-       + (t3 - 2.0 * t2 + t) * m1
-       + (-2.0 * t3 + 3.0 * t2) * p2
-       + (t3 - t2) * m2;
-}
-
-vec3 hermiteTangent(float t, vec3 p1, vec3 m1, vec3 p2, vec3 m2) {
-  float t2 = t * t;
-  return (6.0 * t2 - 6.0 * t) * p1
-       + (3.0 * t2 - 4.0 * t + 1.0) * m1
-       + (-6.0 * t2 + 6.0 * t) * p2
-       + (3.0 * t2 - 2.0 * t) * m2;
-}
-
-void main() {
-  float bias = position.y;
-  vec2 u = normalize(position.xz);
-
-  vec3 pos = hermitePoint(bias, aStartPoint, aStartTangent, aEndPoint, aEndTangent);
-  vec3 tangent = normalize(hermiteTangent(bias, aStartPoint, aStartTangent, aEndPoint, aEndTangent));
-
-  // flip-free reference frame from the averaged start/end binormals
-  vec3 startBinormal = normalize(cross(aStartTangent, aStartNormal));
-  vec3 endBinormal = normalize(cross(aEndTangent, aEndNormal));
-  vec3 referenceBinormal = startBinormal + endBinormal;
-  referenceBinormal -= dot(referenceBinormal, tangent) * tangent;
-  referenceBinormal = normalize(referenceBinormal);
-  vec3 referenceNormal = normalize(cross(referenceBinormal, tangent));
-
-  vec3 local = pos + uRadius * (referenceBinormal * u.x + referenceNormal * u.y);
-  vNormal = normalize(mat3(modelMatrix) * (referenceBinormal * u.x + referenceNormal * u.y));
-
-  gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(local, 1.0);
-}
-`;
-
-const TUBE_FRAGMENT_SHADER = /* glsl */ `
-uniform vec3 uLightDirection;
-uniform vec3 uColor;
-uniform float uDiffuse;
-
-varying vec3 vNormal;
-
-void main() {
-  vec3 n = normalize(vNormal);
-  vec3 l = normalize(uLightDirection);
-  vec3 color = uColor * clamp(mix(1.0, dot(n, l), uDiffuse), 0.0, 1.0);
-  gl_FragColor = vec4(color, 1.0);
-  #include <colorspace_fragment>
-}
-`;
 
 const TUBE_ATTRIBUTE_NAMES = [
   "aStartPoint",
@@ -168,17 +68,13 @@ const RUN_SHEET = 1;
 
 interface Run {
   type: number;
-  // vertex indices (into the flattened alpha carbon list), inclusive
   start: number;
   end: number;
-  // secondary structure assignment (helix family) for coloring
   ss: number;
   fade: number;
   target: number;
-  // helix only: fitted axis (cx, cy, cz, dx, dy, dz) and projection extent
   axis: [number, number, number, number, number, number] | null;
   extent: [number, number] | null;
-  // plate only
   mesh: THREE.Mesh | null;
   geometry: THREE.BufferGeometry | null;
   stations: number;
@@ -209,7 +105,6 @@ function moveTowards(current: number, target: number, maxDelta: number): number 
 export class SimpleCartoonRenderer extends THREE.Object3D {
   private readonly options: Required<SimpleCartoonRendererOptions>;
 
-  // thin loop tube (instanced hermite spline segments)
   private readonly tubeGeometry: THREE.InstancedBufferGeometry;
   private readonly tubeMaterial: THREE.ShaderMaterial;
   private readonly tubeMesh: THREE.Mesh;
@@ -217,10 +112,8 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   private readonly tubeAttributes: THREE.InstancedBufferAttribute[] = [];
   private readonly tubeLimit: number;
 
-  // rigid helix pipes (one instanced cylinder, matrix per helix)
   private readonly pipeMesh: THREE.InstancedMesh;
 
-  // beta plates (one extruded arrow geometry per strand run)
   private readonly platesGroup = new THREE.Group();
   private readonly plateMaterial: THREE.MeshStandardMaterial;
   private readonly plateCurve = new THREE.CatmullRomCurve3([], false, "centripetal", 0.5);
@@ -234,27 +127,43 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
   private tangents = new Float32Array(0);
   private normals = new Float32Array(0);
 
-  // per-vertex blend toward the axis of the helix run covering it
   private helixFade = new Float32Array(0);
   private axisProj = new Float32Array(0);
   private axisDir = new Float32Array(0);
   private axisNormal = new Float32Array(0);
 
   private runs = new Map<string, Run>();
-  // runs in iteration order, plus the run index covering each vertex with an
-  // active plate (used to route the loop tube around plates)
   private readonly runArray: Run[] = [];
   private vertexSheetRun = new Int32Array(0);
 
   private lastPositions: ArrayLike<number> | null = null;
 
-  private readonly dssp = new DsspCalculator();
+  private readonly dsspWorker = new Worker(
+    new URL("./simple-cartoon/dssp-worker.ts", import.meta.url),
+    { type: "module" },
+  );
   private dsspTimer = Infinity;
   private dsspDirty = false;
+  private topologyVersion = 0;
+  private dsspRequestId = 0;
+  private dsspInFlight = false;
 
   constructor(userOptions: SimpleCartoonRendererOptions = {}) {
     super();
     this.options = { ...DEFAULT_OPTIONS, ...userOptions };
+    this.dsspWorker.onmessage = (event: MessageEvent<{
+      type: "result";
+      topologyVersion: number;
+      requestId: number;
+      assignments: Uint8Array;
+    }>) => {
+      const result = event.data;
+      this.dsspInFlight = false;
+      if (result.topologyVersion !== this.topologyVersion) {
+        return;
+      }
+      this.updateRuns(result.assignments);
+    };
 
     this.tubeLimit = Math.max(1, this.options.maxResidues);
     this.tubeBuffers = TUBE_ATTRIBUTE_NAMES.map(
@@ -283,8 +192,8 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.tubeGeometry.instanceCount = 0;
 
     this.tubeMaterial = new THREE.ShaderMaterial({
-      vertexShader: TUBE_VERTEX_SHADER,
-      fragmentShader: TUBE_FRAGMENT_SHADER,
+      vertexShader: tubeVertexShader,
+      fragmentShader: tubeFragmentShader,
       uniforms: {
         uRadius: { value: this.options.loopRadius },
         uColor: { value: new THREE.Color(...SS_WHITE) },
@@ -328,8 +237,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     return this.backboneSegments > 0;
   }
 
-  // Residues covered by the ribbon drawing (its whole polypeptide path), used
-  // to decide which particles the ball-and-stick renderer should skip.
   get ribbonResidues(): ReadonlySet<number> {
     return this.drawnResidues;
   }
@@ -371,9 +278,17 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.axisNormal = new Float32Array(n3);
     this.vertexSheetRun = new Int32Array(this.vertexCount);
 
-    this.dssp.build(polypeptides.residueSequences, atomNames, atomResidues);
+    this.topologyVersion += 1;
+    this.dsspWorker.postMessage({
+      type: "build",
+      topologyVersion: this.topologyVersion,
+      residueSequences: polypeptides.residueSequences,
+      atomNames,
+      atomResidues: Array.from(atomResidues),
+    });
     this.dsspTimer = Infinity;
     this.dsspDirty = true;
+    this.dsspInFlight = false;
 
     if (this.lastPositions) {
       this.setPositions(this.lastPositions);
@@ -404,16 +319,20 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       return;
     }
 
-    // headlamp: the light direction points back toward the camera
     this.tubeMaterial.uniforms.uLightDirection.value
       .set(0, 0, 1)
       .applyQuaternion(camera.getWorldQuaternion(scratchQuaternion));
 
     this.dsspTimer += dt;
-    if (this.dsspTimer >= this.options.dsspInterval && this.dsspDirty && this.lastPositions) {
+    if (
+      this.dsspTimer >= this.options.dsspInterval
+      && this.dsspDirty
+      && this.lastPositions
+      && !this.dsspInFlight
+    ) {
       this.dsspTimer = 0;
       this.dsspDirty = false;
-      this.updateRuns(this.dssp.calculate(this.lastPositions));
+      this.requestDsspCalculation(this.lastPositions);
     }
 
     if (this.fadeRuns(dt)) {
@@ -423,6 +342,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
 
   dispose() {
     this.clearRuns();
+    this.dsspWorker.terminate();
     this.tubeGeometry.dispose();
     this.tubeMaterial.dispose();
     this.pipeMesh.geometry.dispose();
@@ -430,7 +350,19 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.plateMaterial.dispose();
   }
 
-  // --- runs (contiguous helices / strands) ----------------------------------
+  private requestDsspCalculation(positions: ArrayLike<number>) {
+    const positionCopy = Float32Array.from(positions);
+    this.dsspInFlight = true;
+    this.dsspWorker.postMessage(
+      {
+        type: "calculate",
+        topologyVersion: this.topologyVersion,
+        requestId: ++this.dsspRequestId,
+        positions: positionCopy,
+      },
+      [positionCopy.buffer],
+    );
+  }
 
   private runKey(type: number, start: number, end: number): string {
     return `${type}:${start}:${end}`;
@@ -571,14 +503,12 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       if (run.fade <= 0.001) continue;
 
       if (run.type === RUN_HELIX) {
-        // fit the rigid axis, marking the vertices for tube snapping
         if (this.fitHelixAxis(positions, run)) {
           for (let v = run.start; v <= run.end; ++v) {
             this.helixFade[v] = Math.max(this.helixFade[v], run.fade);
           }
         }
       } else if (run.target === 1) {
-        // vertices covered by an (incoming) plate: the tube avoids them
         for (let v = run.start; v <= run.end; ++v) {
           this.vertexSheetRun[v] = index;
         }
@@ -590,14 +520,9 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.updatePlates(positions);
   }
 
-  // Fit the rigid axis of a helix run and store per-vertex projections.
-  // Returns false for degenerate runs.
   private fitHelixAxis(positions: ArrayLike<number>, run: Run): boolean {
     const ca = this.caIndices;
     const length = run.end - run.start + 1;
-
-    // direction: the transverse spiral components of the cardinal tangents
-    // cancel over a helix, leaving the axial direction
     let dx = 0, dy = 0, dz = 0;
     for (let v = run.start; v <= run.end; ++v) {
       const s = v * 3;
@@ -620,7 +545,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     dy /= dlen;
     dz /= dlen;
 
-    // axis point: centroid of the run's alpha carbons
     let cx = 0, cy = 0, cz = 0;
     for (let v = run.start; v <= run.end; ++v) {
       const a = ca[v] * 3;
@@ -632,7 +556,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     cy /= length;
     cz /= length;
 
-    // a stable perpendicular normal for the pipe frame
     const mid = (run.start + (length >> 1)) * 3;
     let nx = this.normals[mid];
     let ny = this.normals[mid + 1];
@@ -726,8 +649,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     normal[seg * 3 + 2] = nz;
   }
 
-  // Start a tube segment at the tip of a plate's arrow head, so the loop line
-  // visually continues from the arrow instead of running under the plate.
   private writeArrowTipFrame(seg: number, run: Run, positions: ArrayLike<number>) {
     const [startPoints, startTangents, startNormals] = this.tubeBuffers;
 
@@ -749,7 +670,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     startPoints[seg * 3 + 1] = positions[a + 1] + dy * tip;
     startPoints[seg * 3 + 2] = positions[a + 2] + dz * tip;
 
-    // leave the tip along the arrow direction at the usual segment speed
     startTangents[seg * 3] = dx * tlen;
     startTangents[seg * 3 + 1] = dy * tlen;
     startTangents[seg * 3 + 2] = dz * tlen;
@@ -769,12 +689,10 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
         const runA = this.vertexSheetRun[a];
         const runB = this.vertexSheetRun[b];
 
-        // both ends under the same plate: the plate replaces the tube
         if (runA >= 0 && runA === runB) {
           continue;
         }
 
-        // leaving a plate: resume the tube at the arrow tip
         if (runA >= 0 && this.runArray[runA].end === a) {
           this.writeArrowTipFrame(seg, this.runArray[runA], positions);
           this.writeTubeVertexFrame(seg, 1, b, positions);
@@ -782,7 +700,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
           continue;
         }
 
-        // entering a plate (or plain backbone): draw up to the plate base
         this.writeTubeVertexFrame(seg, 0, a, positions);
         this.writeTubeVertexFrame(seg, 1, b, positions);
         seg += 1;
@@ -841,11 +758,9 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
   }
 
-  // --- beta plates ----------------------------------------------------------
 
   private buildPlate(run: Run) {
     const residueCount = run.end - run.start + 1;
-    // curve points: the strand's alpha carbons plus the arrow tip point
     const pointCount = residueCount + 1;
     const sps = this.options.stationsPerSegment;
     const stations = residueCount * sps;
@@ -869,7 +784,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
         indices.push(a, b, c, a, c, d);
       }
     }
-    // start cap
     indices.push(corner(0, 0), corner(0, 1), corner(0, 2));
     indices.push(corner(0, 0), corner(0, 2), corner(0, 3));
     geometry.setIndex(indices);
@@ -884,10 +798,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.platesGroup.add(mesh);
   }
 
-  // Half width of the plate at a distance d (nm) back from the arrow tip:
-  // constant body, then at the head base a sharp shoulder step up to the head
-  // width and a straight linear taper to the tip, so the head reads as a
-  // clean triangle sitting on the body.
   private plateHalfWidth(d: number, headLen: number): number {
     const { sheetWidth, arrowExtra } = this.options;
     if (headLen <= 1e-6 || d >= headLen) {
@@ -911,8 +821,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
   }
 
-  // Sweep the arrow cross section along a centripetal Catmull-Rom curve
-  // through the strand's alpha carbons and the arrow tip point.
   private writePlatePositions(run: Run, positions: ArrayLike<number>) {
     const geometry = run.geometry!;
     const curvePoints = run.curvePoints!;
@@ -925,7 +833,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     const residueCount = run.end - run.start + 1;
     const { sheetThickness, arrowLength } = this.options;
 
-    // curve control points: strand alpha carbons, then the arrow tip point
     let totalLen = arrowLength;
     let prevX = 0, prevY = 0, prevZ = 0;
     for (let k = 0; k < residueCount; ++k) {
@@ -942,7 +849,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       prevY = y;
       prevZ = z;
 
-      // per control point binormal: cross(tangent, normal), matching the tube
       const s = v * 3;
       let bx = this.tangents[s + 1] * this.normals[s + 2] - this.tangents[s + 2] * this.normals[s + 1];
       let by = this.tangents[s + 2] * this.normals[s] - this.tangents[s] * this.normals[s + 2];
@@ -958,7 +864,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       binormals[k * 3 + 2] = bz;
     }
 
-    // arrow tip point, straight past the last residue along its tangent
     const e = run.end * 3;
     const lastA = ca[run.end] * 3;
     const tlen = Math.hypot(this.tangents[e], this.tangents[e + 1], this.tangents[e + 2]) || 1;
@@ -989,7 +894,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
 
       this.plateCurve.getPoint(t, scratchPosition);
 
-      // tangent by central difference (allocation free via scratch targets)
       const t1 = Math.max(t - delta, 0);
       const t2 = Math.min(t + delta, 1);
       this.plateCurve.getPoint(t1, scratchPointA);
@@ -1000,8 +904,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       }
       scratchTangent.normalize();
 
-      // flip-free frame: interpolate the control point binormals along the
-      // curve, then re-perpendicularize against the tangent
       const ft = t * curveSegments;
       const segIndex = Math.min(Math.floor(ft), curveSegments - 1);
       const tau = ft - segIndex;
