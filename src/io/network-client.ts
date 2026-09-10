@@ -76,7 +76,8 @@ const RENDERER_CARTOON_SPLINE = 2;
 
 function rendererKind(renderer: string | undefined): number {
   if (renderer && renderer.startsWith('cartoon')) {
-    return renderer.includes('extended') ? RENDERER_CARTOON_SPLINE : RENDERER_CARTOON;
+    //return renderer.includes('extended') ? RENDERER_CARTOON_SPLINE : RENDERER_CARTOON;
+    return RENDERER_CARTOON_SPLINE;
   }
   return RENDERER_NAIVE;
 }

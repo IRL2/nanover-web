@@ -20,9 +20,6 @@ export interface SimpleCartoonRendererOptions {
   helixRadius?: number;
   sheetWidth?: number;
   sheetThickness?: number;
-  arrowExtra?: number;
-  headLength?: number;
-  arrowLength?: number;
   minHelixRun?: number;
   minSheetRun?: number;
   tubeSegments?: number;
@@ -30,7 +27,6 @@ export interface SimpleCartoonRendererOptions {
   pipeSides?: number;
   stationsPerSegment?: number;
   dsspInterval?: number;
-  fadeSpeed?: number;
 }
 
 const DEFAULT_OPTIONS: Required<SimpleCartoonRendererOptions> = {
@@ -40,9 +36,6 @@ const DEFAULT_OPTIONS: Required<SimpleCartoonRendererOptions> = {
   helixRadius: 0.09,
   sheetWidth: 0.12,
   sheetThickness: 0.02,
-  arrowExtra: 0.9,
-  headLength: 0.55,
-  arrowLength: 0.25,
   minHelixRun: 2,
   minSheetRun: 2,
   tubeSegments: 16,
@@ -50,9 +43,7 @@ const DEFAULT_OPTIONS: Required<SimpleCartoonRendererOptions> = {
   pipeSides: 16,
   stationsPerSegment: 6,
   dsspInterval: 1.0,
-  fadeSpeed: 0.5,
 };
-
 
 const TUBE_ATTRIBUTE_NAMES = [
   "aStartPoint",
@@ -71,8 +62,6 @@ interface Run {
   start: number;
   end: number;
   ss: number;
-  fade: number;
-  target: number;
   axis: [number, number, number, number, number, number] | null;
   extent: [number, number] | null;
   mesh: THREE.Mesh | null;
@@ -94,13 +83,6 @@ const scratchPointB = new THREE.Vector3();
 const scratchTangent = new THREE.Vector3();
 const scratchBinormal = new THREE.Vector3();
 const scratchNormal = new THREE.Vector3();
-
-function moveTowards(current: number, target: number, maxDelta: number): number {
-  if (Math.abs(target - current) <= maxDelta) {
-    return target;
-  }
-  return current + Math.sign(target - current) * maxDelta;
-}
 
 export class SimpleCartoonRenderer extends THREE.Object3D {
   private readonly options: Required<SimpleCartoonRendererOptions>;
@@ -335,9 +317,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       this.requestDsspCalculation(this.lastPositions);
     }
 
-    if (this.fadeRuns(dt)) {
-      this.refreshGeometry();
-    }
   }
 
   dispose() {
@@ -428,8 +407,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
                 start: runStart,
                 end: v - 1,
                 ss: assignments[runStart + (runLength >> 1)],
-                fade: 0,
-                target: 1,
                 axis: null,
                 extent: null,
                 mesh: null,
@@ -452,31 +429,14 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
 
     for (const [key, run] of this.runs) {
-      run.target = alive.has(key) ? 1 : 0;
-    }
-  }
-
-  private fadeRuns(dt: number): boolean {
-    const delta = this.options.fadeSpeed * dt;
-    let changed = false;
-
-    for (const [key, run] of this.runs) {
-      const next = moveTowards(run.fade, run.target, delta);
-      if (next !== run.fade) {
-        run.fade = next;
-        changed = true;
-      }
-      if (run.target === 0 && run.fade <= 0.001) {
+      if (!alive.has(key)) {
         this.disposeRun(run);
         this.runs.delete(key);
-        changed = true;
       }
     }
 
-    return changed;
+    this.refreshGeometry();
   }
-
-  // --- geometry refresh -----------------------------------------------------
 
   private refreshGeometry() {
     const positions = this.lastPositions;
@@ -500,15 +460,13 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       const index = this.runArray.length;
       this.runArray.push(run);
 
-      if (run.fade <= 0.001) continue;
-
       if (run.type === RUN_HELIX) {
         if (this.fitHelixAxis(positions, run)) {
           for (let v = run.start; v <= run.end; ++v) {
-            this.helixFade[v] = Math.max(this.helixFade[v], run.fade);
+            this.helixFade[v] = 1;
           }
         }
-      } else if (run.target === 1) {
+      } else {
         for (let v = run.start; v <= run.end; ++v) {
           this.vertexSheetRun[v] = index;
         }
@@ -649,36 +607,6 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     normal[seg * 3 + 2] = nz;
   }
 
-  private writeArrowTipFrame(seg: number, run: Run, positions: ArrayLike<number>) {
-    const [startPoints, startTangents, startNormals] = this.tubeBuffers;
-
-    const e = run.end * 3;
-    const a = this.caIndices[run.end] * 3;
-
-    const tlen = Math.hypot(this.tangents[e], this.tangents[e + 1], this.tangents[e + 2]);
-    if (tlen < 1e-9) {
-      this.writeTubeVertexFrame(seg, 0, run.end, positions);
-      return;
-    }
-
-    const dx = this.tangents[e] / tlen;
-    const dy = this.tangents[e + 1] / tlen;
-    const dz = this.tangents[e + 2] / tlen;
-    const tip = this.options.arrowLength;
-
-    startPoints[seg * 3] = positions[a] + dx * tip;
-    startPoints[seg * 3 + 1] = positions[a + 1] + dy * tip;
-    startPoints[seg * 3 + 2] = positions[a + 2] + dz * tip;
-
-    startTangents[seg * 3] = dx * tlen;
-    startTangents[seg * 3 + 1] = dy * tlen;
-    startTangents[seg * 3 + 2] = dz * tlen;
-
-    startNormals[seg * 3] = this.normals[e];
-    startNormals[seg * 3 + 1] = this.normals[e + 1];
-    startNormals[seg * 3 + 2] = this.normals[e + 2];
-  }
-
   private assembleTubes(positions: ArrayLike<number>) {
     let seg = 0;
     for (const { offset, length } of this.sequences) {
@@ -687,16 +615,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
         const b = offset + i + 1;
 
         const runA = this.vertexSheetRun[a];
-        const runB = this.vertexSheetRun[b];
-
-        if (runA >= 0 && runA === runB) {
-          continue;
-        }
-
-        if (runA >= 0 && this.runArray[runA].end === a) {
-          this.writeArrowTipFrame(seg, this.runArray[runA], positions);
-          this.writeTubeVertexFrame(seg, 1, b, positions);
-          seg += 1;
+        if (runA >= 0 && runA === this.vertexSheetRun[b]) {
           continue;
         }
 
@@ -718,7 +637,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     let count = 0;
 
     for (const run of this.runs.values()) {
-      if (run.type !== RUN_HELIX || run.fade <= 0.005 || count >= this.options.maxHelices) {
+      if (run.type !== RUN_HELIX || count >= this.options.maxHelices) {
         continue;
       }
 
@@ -737,7 +656,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
         cy + dy * (tmin + tmax) * 0.5,
         cz + dz * (tmin + tmax) * 0.5,
       );
-      const radius = this.options.helixRadius * run.fade;
+      const radius = this.options.helixRadius;
       scratchScale.set(radius, length, radius);
       scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale);
       this.pipeMesh.setMatrixAt(count, scratchMatrix);
@@ -758,15 +677,14 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     }
   }
 
+  // --- sheet plates ---------------------------------------------------------
 
   private buildPlate(run: Run) {
     const residueCount = run.end - run.start + 1;
-    const pointCount = residueCount + 1;
-    const sps = this.options.stationsPerSegment;
-    const stations = residueCount * sps;
+    const stations = Math.max(1, (residueCount - 1) * this.options.stationsPerSegment);
     run.stations = stations;
-    run.curvePoints = Array.from({ length: pointCount }, () => new THREE.Vector3());
-    run.binormals = new Float32Array(pointCount * 3);
+    run.curvePoints = Array.from({ length: residueCount }, () => new THREE.Vector3());
+    run.binormals = new Float32Array(residueCount * 3);
 
     const vertexCount = (stations + 1) * 4;
     const geometry = new THREE.BufferGeometry();
@@ -798,22 +716,9 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     this.platesGroup.add(mesh);
   }
 
-  private plateHalfWidth(d: number, headLen: number): number {
-    const { sheetWidth, arrowExtra } = this.options;
-    if (headLen <= 1e-6 || d >= headLen) {
-      return sheetWidth;
-    }
-    const wide = sheetWidth * (1 + arrowExtra);
-    return wide * (d / headLen);
-  }
-
   private updatePlates(positions: ArrayLike<number>) {
     for (const run of this.runs.values()) {
       if (run.type !== RUN_SHEET || !run.geometry || !run.mesh) {
-        continue;
-      }
-      if (run.fade <= 0.005) {
-        run.mesh.visible = false;
         continue;
       }
       this.writePlatePositions(run, positions);
@@ -831,23 +736,12 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
     const ca = this.caIndices;
     const stations = run.stations;
     const residueCount = run.end - run.start + 1;
-    const { sheetThickness, arrowLength } = this.options;
+    const { sheetWidth, sheetThickness } = this.options;
 
-    let totalLen = arrowLength;
-    let prevX = 0, prevY = 0, prevZ = 0;
     for (let k = 0; k < residueCount; ++k) {
       const v = run.start + k;
       const a = ca[v] * 3;
-      const x = positions[a];
-      const y = positions[a + 1];
-      const z = positions[a + 2];
-      curvePoints[k].set(x, y, z);
-      if (k > 0) {
-        totalLen += Math.hypot(x - prevX, y - prevY, z - prevZ);
-      }
-      prevX = x;
-      prevY = y;
-      prevZ = z;
+      curvePoints[k].set(positions[a], positions[a + 1], positions[a + 2]);
 
       const s = v * 3;
       let bx = this.tangents[s + 1] * this.normals[s + 2] - this.tangents[s + 2] * this.normals[s + 1];
@@ -864,24 +758,14 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
       binormals[k * 3 + 2] = bz;
     }
 
+    this.plateCurve.points = curvePoints;
+
     const e = run.end * 3;
-    const lastA = ca[run.end] * 3;
     const tlen = Math.hypot(this.tangents[e], this.tangents[e + 1], this.tangents[e + 2]) || 1;
     const dirX = this.tangents[e] / tlen;
     const dirY = this.tangents[e + 1] / tlen;
     const dirZ = this.tangents[e + 2] / tlen;
-    curvePoints[residueCount].set(
-      positions[lastA] + dirX * arrowLength,
-      positions[lastA + 1] + dirY * arrowLength,
-      positions[lastA + 2] + dirZ * arrowLength,
-    );
-    binormals[residueCount * 3] = binormals[(residueCount - 1) * 3];
-    binormals[residueCount * 3 + 1] = binormals[(residueCount - 1) * 3 + 1];
-    binormals[residueCount * 3 + 2] = binormals[(residueCount - 1) * 3 + 2];
 
-    this.plateCurve.points = curvePoints;
-
-    const headLen = Math.min(this.options.headLength, totalLen);
     const curveSegments = curvePoints.length - 1;
     const delta = 0.001;
 
@@ -935,8 +819,7 @@ export class SimpleCartoonRenderer extends THREE.Object3D {
 
       scratchNormal.crossVectors(scratchBinormal, scratchTangent).normalize();
 
-      const d = (1 - t) * totalLen;
-      const w = this.plateHalfWidth(d, headLen) * run.fade;
+      const w = sheetWidth;
       const h = sheetThickness;
 
       const bx = scratchBinormal.x, by = scratchBinormal.y, bz = scratchBinormal.z;
