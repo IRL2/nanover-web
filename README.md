@@ -64,32 +64,17 @@ openssl req -days 3650 -new -newkey rsa:2048 -key localhost.key -x509 -out local
 
 This won't work in Firefox because it disallows connecting to self-signed websockets.
 
-Run a NanoVer python server with nanover-server, giving ssl credentials, and the cloud discovery address:
+Run a NanoVer python server with nanover-server, requesting automatic ssl, and the cloud discovery address:
 ```bash
-nanover-server --omm tutorials/ase/openmm_files/17-ala.xml --ssl localhost.pem localhost.key key_password --cloud-discovery irl-discovery.onrender.com
+nanover-server --omm tutorials/ase/openmm_files/17-ala.xml --ssl-auto --cloud-discovery irl-discovery.onrender.com
 ```
 
 ## Serving NanoVer to the WebXR client from Python/Jupyter notebook
 
-Build the SSL context. Set the passphrase you have chosen in the `password` argument of `load_cert_chain`:
+Create a runner from the WebXR constructor, which handles SSL self-signing automatically:
 
 ```python
-import ssl
-
-certfile = str("localhost.pem")
-keyfile = str("localhost.key")
-
-ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-ssl_context.load_verify_locations(certfile)
-ssl_context.load_cert_chain(certfile, keyfile=keyfile, password="nanover")
-```
-
-Start the server with the SSL context provided:
-
-```python
-imd_runner = OmniRunner.with_basic_server(
-    simulation, name="webxr-nanover-server", ssl=ssl_context
-)
+imd_runner = OmniRunner.with_webxr_server(simulation, name="webxr-nanover-server")
 imd_runner.load(0)
 ```
 
@@ -106,17 +91,5 @@ print(f"Network:  https://{get_local_ip()}:{services['https']}")
 Advertise on cloud discovery:
 
 ```python
-from nanover.websocket.discovery import DiscoveryClient
-
-advertise = DiscoveryClient.advertise_server(
-    "irl-discovery.onrender.com", app_server=imd_runner.app_server
-)
-advertise.__enter__()
-```
-
-Stop the server and advertising when you are done:
-
-```python
-advertise.__exit__(None, None, None)
-imd_runner.close()
+imd_runner.advertise_on_web_discovery(endpoint="irl-discovery.onrender.com")
 ```
