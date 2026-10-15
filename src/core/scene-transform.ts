@@ -50,9 +50,21 @@ export function sceneStateChanged(a: SceneStateTuple, b: SceneStateTuple, epsilo
 }
 
 export function applyLiveSceneTransform(objects: Object3D, scene: LiveSceneTransform) {
+  if (!Number.isFinite(scene.scale[0]) || scene.scale[0] <= 0.001) {
+    objects.position.set(0, 0, 0);
+    objects.quaternion.identity();
+    objects.scale.set(1, 1, 1);
+    return;
+  }
+
   // mirror the left-handed scene pose into right-handed calibrated space;
   objects.position.set(-scene.position[0], scene.position[1], scene.position[2]);
   objects.quaternion.set(scene.rotation[0], -scene.rotation[1], -scene.rotation[2], scene.rotation[3]);
+  if (Number.isFinite(objects.quaternion.lengthSq()) && objects.quaternion.lengthSq() > 1e-12) {
+    objects.quaternion.normalize();
+  } else {
+    objects.quaternion.identity();
+  }
   objects.scale.set(scene.scale[0], scene.scale[1], scene.scale[2]);
 }
 
