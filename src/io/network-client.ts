@@ -74,10 +74,11 @@ const RENDERER_NAIVE = 0;
 const RENDERER_CARTOON = 1;
 const RENDERER_CARTOON_SPLINE = 2;
 
-function rendererKind(renderer: string | undefined): number {
+export type CartoonStyle = 'simple' | 'advanced';
+
+function rendererKind(renderer: string | undefined, style: CartoonStyle): number {
   if (renderer && renderer.startsWith('cartoon')) {
-    // return renderer.includes('extended') ? RENDERER_CARTOON_SPLINE : RENDERER_CARTOON;
-    return RENDERER_CARTOON_SPLINE;
+    return style === 'simple' ? RENDERER_CARTOON : RENDERER_CARTOON_SPLINE;
   }
   return RENDERER_NAIVE;
 }
@@ -102,6 +103,15 @@ export class NetworkClient {
   private lastBonds: Uint32Array | null = null;
   private lastPositions: Float32Array | null = null;
   private lastSelections: LiveSelectionState[] = [];
+  private cartoonStyle: CartoonStyle = 'advanced';
+
+  setCartoonStyle(style: CartoonStyle) {
+    if (style === this.cartoonStyle) {
+      return;
+    }
+    this.cartoonStyle = style;
+    this.applyRenderers();
+  }
   private lastSelectionSignature = '';
 
   private readonly boxEdgesGeometry = new LineSegmentsGeometry();
@@ -573,13 +583,13 @@ export class NetworkClient {
 
     const root = this.lastSelections.find(({ id }) => id === ROOT_SELECTION_ID);
     if (root) {
-      kinds.fill(rendererKind(root.renderer));
+      kinds.fill(rendererKind(root.renderer, this.cartoonStyle));
     }
     for (const selection of this.lastSelections) {
       if (selection.id === ROOT_SELECTION_ID || selection.renderer === undefined) {
         continue;
       }
-      const kind = rendererKind(selection.renderer);
+      const kind = rendererKind(selection.renderer, this.cartoonStyle);
       if (selection.particleIds === null) {
         kinds.fill(kind);
         continue;

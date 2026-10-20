@@ -13,6 +13,7 @@
       <div id="tab-bar">
         <button class="tab-btn active" data-tab="simulation">Recording</button>
         <button class="tab-btn" data-tab="server">Server</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
         <button class="tab-btn" data-tab="info">Info</button>
       </div>
 
@@ -25,8 +26,17 @@
       </div>
 
       <div class="tab-content" id="tab-server">
-        <button id="btn-refresh" class="panel-btn">Refresh</button>
+        <button id="btn-refresh" class="panel-btn primary">Refresh</button>
         <div id="server-buttons-container"></div>
+      </div>
+
+      <div class="tab-content" id="tab-settings">
+        <label id="cartoon-style-label" for="cartoon-style-select">Cartoon renderer</label>
+        <select id="cartoon-style-select">
+          <option value="simple">Simple</option>
+          <option value="advanced" selected>Advanced</option>
+        </select>
+        <a id="btn-discovery" class="panel-btn" href="https://irl-discovery.onrender.com/" target="_blank" rel="noopener noreferrer">Open discovery page</a>
       </div>
 
       <div class="tab-content" id="tab-info">

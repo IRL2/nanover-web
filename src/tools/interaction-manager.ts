@@ -52,7 +52,7 @@ export class InteractionManager {
   private readonly controllerTips = new Map<Group<WebXRSpaceEventMap>, Object3D>();
   private readonly remoteLines: Mesh[] = [];
 
-  private readonly lineGeometry = new CylinderGeometry(0.005, 0.005, 1, 8);
+  private readonly lineGeometry = new CylinderGeometry(0.0025, 0.0025, 1, 8);
   private readonly lineMaterial = new MeshBasicMaterial({
     color: 0xffff00,
     transparent: true,

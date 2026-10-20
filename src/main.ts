@@ -193,6 +193,7 @@ class SceneApp {
       getFrameSeek: () => this.frameSeek,
       getFramePlay: () => this.framePlay,
       updateTrajectoryName: this.updateTrajectoryName,
+      setCartoonStyle: style => this.networkClient.setCartoonStyle(style),
       connectToServer: (host: string) => {
         this.networkClient.connect(host);
         this.trajectoryLoader.hideAll();

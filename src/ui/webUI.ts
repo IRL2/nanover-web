@@ -5,9 +5,10 @@ export interface WebUIContext {
     getFramePlay: () => Controller;
     updateTrajectoryName: (name: string) => void;
     connectToServer: (host: string) => void;
+    setCartoonStyle: (style: 'simple' | 'advanced') => void;
 }
 
-type DiscoveryServerInfo = { name: string; wss: string };
+type DiscoveryServerInfo = { name: string; wss: string; https?: string };
 type DiscoveryResponseItem = { info: DiscoveryServerInfo };
 
 const DISCOVERY_LIST_URL = 'https://irl-discovery.onrender.com/list';
@@ -55,6 +56,14 @@ export function setupWebUI(ctx: WebUIContext) {
             fp.setValue(false);
             fs.setValue(Number(seekSlider.value));
             syncPlayPauseLabel();
+        });
+    }
+
+    const cartoonSelect = document.getElementById('cartoon-style-select') as HTMLSelectElement | null;
+    if (cartoonSelect) {
+        context.setCartoonStyle(cartoonSelect.value as 'simple' | 'advanced');
+        cartoonSelect.addEventListener('change', () => {
+            context?.setCartoonStyle(cartoonSelect.value as 'simple' | 'advanced');
         });
     }
 
@@ -114,7 +123,21 @@ function renderServerButtons(servers: DiscoveryServerInfo[]) {
         serverButton.addEventListener('click', () => {
             context?.connectToServer(server.wss);
         });
-        serverButtonsContainer.appendChild(serverButton);
+
+        const row = document.createElement('div');
+        row.className = 'server-row';
+        row.appendChild(serverButton);
+
+        if (server.https) {
+            const certLink = document.createElement('a');
+            certLink.className = 'panel-btn cert-btn';
+            certLink.textContent = 'CERT';
+            certLink.href = server.https;
+            certLink.target = '_blank';
+            certLink.rel = 'noopener noreferrer';
+            row.appendChild(certLink);
+        }
+        serverButtonsContainer.appendChild(row);
     }
 }
 
