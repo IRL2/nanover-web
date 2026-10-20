@@ -1,4 +1,4 @@
-import { Container, Svg, Text as UIText } from '@pmndrs/uikit';
+import { Container, Image, Text as UIText } from '@pmndrs/uikit';
 import { Object3D, Vector3, PerspectiveCamera, Group, Matrix4, Quaternion } from 'three';
 import { Controller } from 'lil-gui';
 import twemoji from '@twemoji/api';
@@ -64,8 +64,8 @@ function getEmojiSvgUrl(emoji: string): string {
     let url = '';
     twemoji.parse(emoji, {
         callback: (icon) => {
-            url = `https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/svg/${icon}.svg`;
-            return '';
+            url = `https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/${icon}.png`;
+            return url;
         },
     });
     return url;
@@ -420,7 +420,7 @@ export function setupXRUI(panelRot: Object3D, context: XRUIContext) {
             }
 
             if (command.icon) {
-                button.container.add(new Svg({
+                button.container.add(new Image({
                     src: getEmojiSvgUrl(command.icon),
                     width: 8,
                     height: 8,
